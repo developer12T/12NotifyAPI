@@ -158,7 +158,7 @@ function authenticateLDAP(username, password) {
             resolve({ success: false, message: 'ไม่พบผู้ใช้ในระบบ' });
             return;
           }
-
+ 
           // ตรวจสอบรหัสผ่านด้วย DN ที่พบ
           verifyPassword(client, userDN, password, entries, resolve);
         });
@@ -273,7 +273,7 @@ function readLDAP(username, password) {
   
           res.on('error', (err) => {
             console.error('Search error:', err);
-          });
+          }); 
   
           res.on('end', (result) => {
             console.log('การค้นหาเสร็จสิ้น, พบทั้งหมด:', entries.length, 'รายการ');
@@ -415,12 +415,13 @@ async function searchUsers(filter) {
       filter: filter,
       scope: 'sub',
       attributes: ['cn', 'employeeID', 'distinguishedName']
-    }, (err, res) => {
+    }, (err, res) => { 
       if (err) {
         console.error('LDAP search error:', err);
         reject(err);
         return;
       }
+      console.log('searchUsers',res);
 
       res.on('searchEntry', (entry) => {
         const tempEntry = {};
