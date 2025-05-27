@@ -841,12 +841,17 @@ router.get('/:roomId', async (req, res) => {
 
 // Update room details
 router.put('/:roomId', async (req, res) => {
+  console.log('=== Room Update Request ===');
+  console.log('Room ID:', req.params.roomId);
+  console.log('Update data:', req.body);
+
   try {
     const { roomId } = req.params;
-    const { name, description, color, imageUrl } = req.body;
+    const { name, description, color, imageUrl, admin, members } = req.body;
 
     // Validate required fields
     if (!name) {
+      console.log('[Validation Error] Room name is required');
       return res.status(400).json({
         statusCode: 400,
         message: 'ชื่อห้องเป็นข้อมูลที่จำเป็น'
@@ -855,28 +860,127 @@ router.put('/:roomId', async (req, res) => {
 
     const room = await Room.findById(roomId);
     if (!room) {
+      console.log('[Error] Room not found:', roomId);
       return res.status(404).json({
         statusCode: 404,
         message: 'ไม่พบห้องแชท'
       });
     }
 
+    console.log('[Room Update] Current room data:', {
+      name: room.name,
+      admin: room.admin,
+      memberCount: room.members.length
+    });
+
+    // Prepare update data
+    const updateData = {
+      name,
+      description: description || room.description,
+      color: color || room.color,
+      imageUrl: imageUrl || room.imageUrl,
+      updatedAt: new Date()
+    };
+
+    // Handle admin update if provided
+    if (admin) {
+      console.log('[Room Update] Updating admin:', admin);
+      
+      // Get current admin info
+      const currentAdmin = room.admin;
+      
+      // Create new members array without the new admin (if they were a member)
+      let updatedMembers = room.members.filter(member => member.empId !== admin.empId);
+      
+      // Add previous admin to members list with member role
+      updatedMembers.push({
+        empId: currentAdmin.empId,
+        role: 'User'  // Set role to member for previous admin
+      });
+      
+      // Update both admin and members
+      updateData.admin = {
+        empId: admin.empId,
+        role: admin.role || 'admin'
+      };
+      updateData.members = updatedMembers;
+      
+      console.log('[Room Update] Swapped admin positions:', {
+        newAdmin: admin.empId,
+        previousAdmin: currentAdmin.empId,
+        previousAdminNewRole: 'User',
+        totalMembers: updatedMembers.length,
+        membersList: updatedMembers.map(m => ({ empId: m.empId, role: m.role }))
+      });
+    }
+
+    // Handle members update if provided
+    if (members && Array.isArray(members)) {
+      console.log('[Room Update] Updating members:', members);
+      
+      // Check if current admin is in the new members list
+      const currentAdminInNewMembers = members.some(member => member.empId === room.admin.empId);
+      
+      // If current admin is in new members list, update their role to 'member'
+      if (currentAdminInNewMembers) {
+        console.log('[Room Update] Moving current admin to members with member role:', room.admin.empId);
+        const updatedMembers = members.map(member => {
+          if (member.empId === room.admin.empId) {
+            return {
+              empId: member.empId,
+              role: 'User'  // Set role to member for previous admin
+            };
+          }
+          return {
+            empId: member.empId,
+            role: member.role || 'User'
+          };
+        });
+        updateData.members = updatedMembers;
+      } else {
+        updateData.members = members.map(member => ({
+          empId: member.empId,
+          role: member.role || 'User'
+        }));
+      }
+    }
+
     // Update room details
     const updatedRoom = await Room.findByIdAndUpdate(
       roomId,
-      {
-        name,
-        description: description || room.description,
-        color: color || room.color,
-        imageUrl: imageUrl || room.imageUrl,
-        updatedAt: new Date()
-      },
+      { $set: updateData },
       { new: true }
     );
+
+    console.log('[Room Update] Room updated successfully:', {
+      id: updatedRoom._id,
+      name: updatedRoom.name,
+      admin: updatedRoom.admin,
+      memberCount: updatedRoom.members.length
+    });
 
     // Get admin details using LDAP
     const adminResult = await findUserByEmployeeId(updatedRoom.admin.empId);
     const adminDetails = adminResult.success ? adminResult.user : null;
+
+    // Get member details using LDAP
+    const memberPromises = updatedRoom.members.map(member => 
+      findUserByEmployeeId(member.empId)
+    );
+    const memberResults = await Promise.all(memberPromises);
+    
+    const formattedMembers = memberResults.map((result, index) => {
+      if (result.success && result.user) {
+        return {
+          employeeID: result.user.employeeID,
+          fullName: result.user.fullName,
+          department: result.user.department,
+          profileImage: result.user.profileImage,
+          role: updatedRoom.members[index].role
+        };
+      }
+      return null;
+    }).filter(member => member !== null);
 
     // Format response
     const formattedRoom = {
@@ -892,6 +996,7 @@ router.put('/:roomId', async (req, res) => {
         profileImage: adminDetails.profileImage,
         role: updatedRoom.admin.role
       } : null,
+      members: formattedMembers,
       createdAt: updatedRoom.createdAt,
       updatedAt: updatedRoom.updatedAt,
       memberCount: updatedRoom.members.length
@@ -900,11 +1005,19 @@ router.put('/:roomId', async (req, res) => {
     // Notify room members through socket about the update
     const io = req.app.get('io');
     if (io) {
+      console.log('[Room Update] Emitting room update to members');
       io.to(roomId).emit('roomUpdated', {
         roomId,
         updatedRoom: formattedRoom,
         timestamp: new Date()
       });
+
+      // Also update chat list for all members
+      const updateChatList = req.app.get('updateChatList');
+      if (updateChatList) {
+        console.log('[Room Update] Updating chat list for all members');
+        await updateChatList(roomId);
+      }
     }
 
     res.json({
@@ -913,7 +1026,8 @@ router.put('/:roomId', async (req, res) => {
       data: formattedRoom
     });
   } catch (error) {
-    console.error('Error updating room:', error);
+    console.error('=== Room Update Error ===');
+    console.error('Error details:', error);
     res.status(500).json({
       statusCode: 500,
       message: 'เกิดข้อผิดพลาดในการอัพเดทข้อมูลห้องแชท',

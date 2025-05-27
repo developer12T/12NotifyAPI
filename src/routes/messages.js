@@ -59,9 +59,9 @@ router.post('/send', async (req, res) => {
   try {
     const { roomId, message, employeeId, isAdminNotification } = req.body;
     
-    console.log('=== Send Message Debug Logs ===');
-    console.log('Sender employeeId:', employeeId);
-    console.log('Message content:', message);
+    // console.log('=== Send Message Debug Logs ===');
+    // console.log('Sender employeeId:', employeeId);
+    // console.log('Message content:', message);
     
     // Handle message array or single message
     let messageText;
@@ -71,7 +71,7 @@ router.post('/send', async (req, res) => {
     } else {
       messageText = message || '';
     }
-    console.log('Processed message text:', messageText);
+    // console.log('Processed message text:', messageText);
 
     // Check if sender is a bot
     const botUser = await User.findOne({ employeeID: employeeId, role: 'bot' });
@@ -79,10 +79,10 @@ router.post('/send', async (req, res) => {
     
     if (botUser) {
       // If sender is a bot, get bot details
-      console.log('Sender is a bot, fetching bot details');
+      // console.log('Sender is a bot, fetching bot details');
       const bot = await Bot.findOne({ employeeID: employeeId });
       if (!bot) {
-        console.log('Bot not found for employeeId:', employeeId);
+        // console.log('Bot not found for employeeId:', employeeId);
         return res.status(404).json({ 
           statusCode: 404,
           message: 'ไม่พบข้อมูลบอท' 
@@ -98,10 +98,10 @@ router.post('/send', async (req, res) => {
       console.log('Found bot:', bot.name);
     } else {
       // If sender is a user, get user details from LDAP
-      console.log('Sender is a user, fetching user details from LDAP');
+      // console.log('Sender is a user, fetching user details from LDAP');
       const userDetails = await findUserByEmployeeId(employeeId);
       if (!userDetails.success || !userDetails.user) {
-        console.log('User not found for employeeId:', employeeId);
+        // console.log('User not found for employeeId:', employeeId);
         return res.status(404).json({ 
           statusCode: 404,
           message: 'ไม่พบข้อมูลผู้ใช้ในระบบ' 
@@ -114,7 +114,7 @@ router.post('/send', async (req, res) => {
         imgUrl: userDetails.user.imgUrl || null,
         role: 'user'
       };
-      console.log('Found user:', userDetails.user.fullName);
+      // console.log('Found user:', userDetails.user.fullName);
     }
 
     const room = await Room.findById(roomId);
@@ -125,7 +125,7 @@ router.post('/send', async (req, res) => {
         message: 'ไม่พบห้องแชท' 
       });
     }
-    console.log('Found room:', room.name);
+    // console.log('Found room:', room.name);
 
     const messages = [];
     const roomIds = Array.isArray(roomId) ? roomId : [roomId];
@@ -208,6 +208,12 @@ router.post('/send', async (req, res) => {
             });
           }
         });
+
+        // Update chat list for all room members
+        const updateChatList = req.app.get('updateChatList');
+        if (updateChatList) {
+          await updateChatList(roomId);
+        }
       } catch (error) {
         console.error(`Error emitting message to room ${roomId}:`, error);
       }
@@ -350,7 +356,7 @@ router.post('/bot-send', async (req, res) => {
       });
       console.log('Room updated with new lastMessage');
 
-      // Emit message through Socket.IO with acknowledgment
+      // Emit message through Socket.IO
       const io = req.app.get('io');
       if (io) {
         try {
@@ -387,6 +393,12 @@ router.post('/bot-send', async (req, res) => {
               });
             }
           });
+
+          // Update chat list for all room members
+          const updateChatList = req.app.get('updateChatList');
+          if (updateChatList) {
+            await updateChatList(roomId);
+          }
         } catch (error) {
           console.error(`Error emitting message to room ${roomId}:`, error);
         }
