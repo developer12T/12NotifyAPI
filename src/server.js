@@ -506,6 +506,7 @@ io.on('connection', (socket) => {
           id: room._id,
           name: room.name,
           description: room.description,
+          imageUrl: room.imageUrl,
           color: room.color,
           admin: room.admin ? room.admin.empId : null,
           adminRole: room.admin ? room.admin.role : null,

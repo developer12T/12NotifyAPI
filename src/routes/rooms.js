@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
 const Room = require('../models/Room');
 const User = require('../models/User');
 const { getThaiTime, getThaiTimeISOString, formatThaiDateTime } = require('../utils/timeUtils');
@@ -9,16 +11,39 @@ const { findUserByEmployeeId } = require('../services/ldapServices');
 const Bot = require('../models/Bot');
 const Announcement = require('../models/Announcement');
 
-// Create new room
-router.post('/', async (req, res) => {
-  try {
-    const { name, description, color, admin, members, imageUrl } = req.body;
+// Configure multer for image upload
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/rooms') // Make sure this directory exists
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+        cb(null, 'room-' + uniqueSuffix + path.extname(file.originalname))
+    }
+});
 
-    // ตรวจสอบ admin (ถ้าต้องการเช็คในฐานข้อมูล)
-    // const adminEmp = await Employee.findOne({ empId: admin.empId });
-    // if (!adminEmp) {
-    //   return res.status(403).json({ message: 'Admin not found' });
-    // }
+const upload = multer({ 
+    storage: storage,
+    fileFilter: (req, file, cb) => {
+        // Accept images only
+        if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
+            return cb(new Error('Only image files are allowed!'), false);
+        }
+        cb(null, true);
+    }
+});
+
+// Create new room
+router.post('/', upload.single('image'), async (req, res) => {
+  try {
+    let { name, description, color, admin, members } = req.body;
+    
+    // Parse JSON strings back to objects
+    admin = JSON.parse(admin);
+    members = members ? JSON.parse(members) : [];
+
+    // Get image URL if file was uploaded
+    const imageUrl = req.file ? `/uploads/rooms/${req.file.filename}` : null;
 
     // Initialize unreadCounts for all members including admin
     const allMembers = [
@@ -35,17 +60,24 @@ router.post('/', async (req, res) => {
       name,
       description,
       color: color || '#007bff',
-      admin,      // เป็น object { empId, role }
-      members,    // เป็น array ของ object { empId, role }
+      admin,
+      members,
       lastMessage: null,
-      unreadCounts,  // เพิ่ม unreadCounts สำหรับทุกคน
-      imageUrl    // url รูปห้อง
+      unreadCounts,
+      imageUrl
     });
 
     await room.save();
 
     res.status(201).json(room);
   } catch (error) {
+    // If there's an error and a file was uploaded, we should clean it up
+    if (req.file) {
+      const fs = require('fs');
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Error deleting file:', err);
+      });
+    }
     res.status(500).json({ message: error.message });
   }
 });
@@ -439,6 +471,7 @@ router.get('/employee/:empId', async (req, res) => {
         id: room._id,
         name: room.name,
         description: room.description,
+        imageUrl: room.imageUrl,
         color: room.color,
         admin: room.admin ? room.admin.empId : null,
         adminRole: room.admin ? room.admin.role : null,
@@ -795,7 +828,7 @@ router.get('/:roomId', async (req, res) => {
         employeeID: empId,
         fullName: isBot ? (botDetails?.name || 'Unknown Bot') : (user?.fullName || 'Unknown User'),
         department: isBot ? 'bot notify' : (user?.department || 'Unknown Department'),
-        profileImage: user?.profileImage || null,
+        profileImage: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${empId}.jpg` || null,
         role: isAdmin ? room.admin.role : memberRole,
         isAdmin: isAdmin
       };
@@ -840,10 +873,11 @@ router.get('/:roomId', async (req, res) => {
 });
 
 // Update room details
-router.put('/:roomId', async (req, res) => {
+router.put('/:roomId', upload.single('image'), async (req, res) => {
   console.log('=== Room Update Request ===');
   console.log('Room ID:', req.params.roomId);
   console.log('Update data:', req.body);
+  console.log('File:', req.file);
 
   try {
     const { roomId } = req.params;
@@ -878,9 +912,24 @@ router.put('/:roomId', async (req, res) => {
       name,
       description: description || room.description,
       color: color || room.color,
-      imageUrl: imageUrl || room.imageUrl,
       updatedAt: new Date()
     };
+
+    // Handle image upload if a new file was provided
+    if (req.file) {
+      // Delete old image if it exists
+      if (room.imageUrl) {
+        const fs = require('fs');
+        const oldImagePath = path.join(__dirname, '..', '..', room.imageUrl);
+        fs.unlink(oldImagePath, (err) => {
+          if (err) console.error('Error deleting old image:', err);
+        });
+      }
+      updateData.imageUrl = `/uploads/rooms/${req.file.filename}`;
+    } else if (imageUrl) {
+      // If imageUrl was provided in the request but no file was uploaded
+      updateData.imageUrl = imageUrl;
+    }
 
     // Handle admin update if provided
     if (admin) {
@@ -1026,6 +1075,13 @@ router.put('/:roomId', async (req, res) => {
       data: formattedRoom
     });
   } catch (error) {
+    // If there's an error and a file was uploaded, we should clean it up
+    if (req.file) {
+      const fs = require('fs');
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Error deleting uploaded file:', err);
+      });
+    }
     console.error('=== Room Update Error ===');
     console.error('Error details:', error);
     res.status(500).json({
