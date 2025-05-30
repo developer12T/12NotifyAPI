@@ -54,392 +54,212 @@ const upload = multer({
   }
 });
 
-// Send message to room (text only)
+// ✅ Helper function to get sender details
+async function getSenderDetails(employeeId) {
+  // Check if sender is a bot
+  const botUser = await User.findOne({ employeeID: employeeId, role: 'bot' });
+  
+  if (botUser) {
+    const bot = await Bot.findOne({ employeeID: employeeId });
+    if (!bot) {
+      throw new Error('ไม่พบข้อมูลบอท');
+    }
+    return {
+      employeeID: bot.employeeID,
+      fullName: bot.name,
+      department: 'bot notify',
+      role: 'bot',
+      imgUrl: 'http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/65166.jpg'
+    };
+  } else {
+    const userDetails = await findUserByEmployeeId(employeeId);
+    if (!userDetails.success || !userDetails.user) {
+      throw new Error('ไม่พบข้อมูลผู้ใช้ในระบบ');
+    }
+    return {
+      employeeID: userDetails.user.employeeID,
+      fullName: userDetails.user.fullName,
+      department: userDetails.user.department,
+      imgUrl: userDetails.user.imgUrl || null,
+      role: 'user'
+    };
+  }
+}
+
+// ✅ Send message to room (text only) - อัพเดทให้รองรับ reply
 router.post('/send', async (req, res) => {
   try {
-    const { roomId, message, employeeId, isAdminNotification } = req.body;
+    const { roomId, message, employeeId, isAdminNotification, replyToId } = req.body;
     
-    // console.log('=== Send Message Debug Logs ===');
-    // console.log('Sender employeeId:', employeeId);
-    // console.log('Message content:', message);
+    console.log('=== Send Message Debug Logs ===');
+    console.log('Sender employeeId:', employeeId);
+    console.log('Message content:', message);
+    console.log('Reply to ID:', replyToId || 'Not a reply');
     
     // Handle message array or single message
     let messageText;
     if (Array.isArray(message)) {
-      // Filter out empty messages and join with newline
       messageText = message.filter(m => m && m.trim() !== '').join('\n');
     } else {
       messageText = message || '';
     }
-    // console.log('Processed message text:', messageText);
 
-    // Check if sender is a bot
-    const botUser = await User.findOne({ employeeID: employeeId, role: 'bot' });
-    let sender;
-    
-    if (botUser) {
-      // If sender is a bot, get bot details
-      // console.log('Sender is a bot, fetching bot details');
-      const bot = await Bot.findOne({ employeeID: employeeId });
-      if (!bot) {
-        // console.log('Bot not found for employeeId:', employeeId);
-        return res.status(404).json({ 
-          statusCode: 404,
-          message: 'ไม่พบข้อมูลบอท' 
-        });
-      }
-      sender = {
-        employeeID: bot.employeeID,
-        fullName: bot.name,
-        department: 'bot notify',
-        role: 'bot',
-        imgUrl: 'http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/65166.jpg'
-      };
-      console.log('Found bot:', bot.name);
-    } else {
-      // If sender is a user, get user details from LDAP
-      // console.log('Sender is a user, fetching user details from LDAP');
-      const userDetails = await findUserByEmployeeId(employeeId);
-      if (!userDetails.success || !userDetails.user) {
-        // console.log('User not found for employeeId:', employeeId);
-        return res.status(404).json({ 
-          statusCode: 404,
-          message: 'ไม่พบข้อมูลผู้ใช้ในระบบ' 
-        });
-      }
-      sender = {
-        employeeID: userDetails.user.employeeID,
-        fullName: userDetails.user.fullName,
-        department: userDetails.user.department,
-        imgUrl: userDetails.user.imgUrl || null,
-        role: 'user'
-      };
-      // console.log('Found user:', userDetails.user.fullName);
-    }
+    // Get sender details
+    const sender = await getSenderDetails(employeeId);
 
+    // Check room exists
     const room = await Room.findById(roomId);
     if (!room) {
-      console.log('Room not found:', roomId);
       return res.status(404).json({ 
         statusCode: 404,
         message: 'ไม่พบห้องแชท' 
       });
     }
-    // console.log('Found room:', room.name);
-
-    const messages = [];
-    const roomIds = Array.isArray(roomId) ? roomId : [roomId];
 
     // Get io instance
     const io = req.app.get('io');
     if (!io) {
-      console.error('Socket.IO instance not found');
       return res.status(500).json({ 
         statusCode: 500,
         message: 'เกิดข้อผิดพลาดในการเชื่อมต่อ real-time' 
       });
     }
 
-    for (const roomId of roomIds) {
-      console.log(`\nProcessing room: ${roomId}`);
-      // Create message record
-      const messageObj = new Message({
-        room: roomId,
-        sender: employeeId,
-        isRead: false,
-        createdAt: getThaiTime(),
-        isImage: false,
-        imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
-        isAdminNotification: isAdminNotification || false,
-        ...(messageText ? { message: messageText } : {})
-      });
+    let messageObj;
+    let replyToSenderDetails = null;
 
-      await messageObj.save();
-      messages.push(messageObj);
-      console.log('Message saved to database:', messageObj._id);
-
-      // Update room's lastMessage and increment unreadCount for all members except sender
-      await Room.findByIdAndUpdate(roomId, {
-        $set: {
-          lastMessage: {
-            message: messageText,
-            sender: employeeId,
-            timestamp: messageObj.createdAt,
-            isoString: getThaiTimeISOString(messageObj.createdAt),
-            isImage: false,
-            imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
-            isAdminNotification: isAdminNotification || false
-          }
-        },
-        $inc: {
-          'unreadCounts.$[elem].count': 1
+    // ✅ Check if this is a reply message
+    if (replyToId) {
+      console.log('Creating reply message');
+      // Get the original message to reply to
+      const originalMessage = await Message.findById(replyToId);
+      if (originalMessage) {
+        // Get sender details for the original message
+        const replyToSenderResult = await findUserByEmployeeId(originalMessage.sender);
+        if (replyToSenderResult.success) {
+          replyToSenderDetails = {
+            employeeID: replyToSenderResult.user.employeeID,
+            fullName: replyToSenderResult.user.fullName,
+            department: replyToSenderResult.user.department,
+            profileImage: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${replyToSenderResult.user.employeeID}.jpg`,
+            role: originalMessage.sender === room.admin.empId ? room.admin.role : 
+                  room.members.find(m => m.empId === originalMessage.sender)?.role || 'User'
+          };
         }
-      }, {
-        arrayFilters: [{ 'elem.user': { $ne: employeeId } }]
-      });
-      console.log('Room updated with new lastMessage');
-
-      // Emit message through Socket.IO with acknowledgment
-      try {
-        console.log(`Attempting to emit message to room ${roomId}`);
-        console.log('Connected sockets in room:', io.sockets.adapter.rooms.get(roomId.toString()));
-        
-        io.to(roomId).emit('newMessage', {
-          _id: messageObj._id,
-          room: roomId,
-          sender: sender,
-          timestamp: messageObj.createdAt,
-          isRead: false,
-          isImage: false,
-          imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
-          isAdminNotification: isAdminNotification || false,
-          ...(messageText ? { message: messageText } : {}),
-          success: true
-        }, (response) => {
-          if (response && response.error) {
-            console.error(`Error broadcasting message to room ${roomId}:`, response.error);
-          } else {
-            console.log(`Message broadcasted to room ${roomId} successfully`);
-            console.log('Message details:', {
-              roomId,
-              messageId: messageObj._id,
-              timestamp: messageObj.createdAt,
-              sender: sender.fullName
-            });
-          }
-        });
-
-        // Update chat list for all room members
-        const updateChatList = req.app.get('updateChatList');
-        if (updateChatList) {
-          await updateChatList(roomId);
-        }
-      } catch (error) {
-        console.error(`Error emitting message to room ${roomId}:`, error);
       }
-    }
 
-    console.log('=== End Send Message Debug Logs ===\n');
-
-    res.json({
-      statusCode: 200,
-      message: 'ส่งข้อความสำเร็จ',
-      data: messages.map(message => ({
-        _id: message._id,
-        room: message.room,
-        sender: sender,
-        timestamp: message.createdAt,
-        isRead: message.isRead,
-        isImage: false,
-        imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
-        isAdminNotification: message.isAdminNotification,
-        ...(message.message ? { message: message.message } : {})
-      }))
-    });
-
-  } catch (error) {
-    console.error('Error sending messages:', error);
-    res.status(500).json({ 
-      statusCode: 500,
-      message: 'เกิดข้อผิดพลาดในการส่งข้อความ',
-      error: error.message 
-    });
-  }
-});
- 
-// Send message from bot to all its rooms
-router.post('/bot-send', async (req, res) => {
-  try {
-    const { employeeId, message } = req.body;
-    let isAdminNotification = true
-
-    // Get io instance first
-    const io = req.app.get('io');
-    if (!io) {
-      console.error('Socket.IO instance not found');
-      return res.status(500).json({ 
-        statusCode: 500,
-        message: 'เกิดข้อผิดพลาดในการเชื่อมต่อ real-time' 
+      messageObj = await Message.createReply({
+        roomId,
+        sender: employeeId,
+        message: messageText,
+        replyToId,
+        isImage: false
       });
-    }
 
-    console.log('=== Bot Send Debug Logs ===');
-    console.log('Bot employeeId:', employeeId);
-    console.log('Message content:', message);
-    
-    // Handle message array or single message
-    let messageText;
-    if (Array.isArray(message)) {
-      // Filter out empty messages and join with newline
-      messageText = message.filter(m => m && m.trim() !== '').join('\n');
+      // Add sender details to the reply message
+      if (messageObj.replyToMessage) {
+        messageObj.replyToMessage.sender = replyToSenderDetails;
+      }
     } else {
-      messageText = message || '';
-    }
-    console.log('Processed message text:', messageText);
-
-    // Find bot details
-    const bot = await Bot.findOne({ employeeID: employeeId });
-    if (!bot) {
-      console.log('Bot not found for employeeId:', employeeId);
-      return res.status(404).json({ 
-        statusCode: 404,
-        message: 'ไม่พบข้อมูลบอท' 
-      });
-    }
-    console.log('Found bot:', bot.name);
-
-    // Find bot user
-    const botUser = await User.findOne({ employeeID: employeeId, role: 'bot' });
-    if (!botUser) {
-      console.log('Bot user not found for employeeId:', employeeId);
-      return res.status(404).json({ 
-        statusCode: 404,
-        message: 'ไม่พบข้อมูลผู้ใช้ของบอท' 
-      });
-    }
-    console.log('Found bot user:', botUser.employeeID);
-
-    // Find all rooms where this bot is a member
-    const rooms = await Room.find({
-      'members.empId': employeeId
-    });
-
-    if (rooms.length === 0) {
-      console.log('No rooms found for bot:', employeeId);
-      return res.status(404).json({ 
-        statusCode: 404,
-        message: 'ไม่พบห้องที่บอทเป็นสมาชิก' 
-      });
-    }
-
-    const messages = [];
-    const roomIds = rooms.map(room => room._id);
-    console.log('บอทกำลังส่งข้อความไปยังห้อง:', roomIds);
-    console.log('ห้องที่ socket บอทอยู่:', io.sockets.adapter.rooms);
-
-    for (const roomId of roomIds) {
-      console.log(`\nProcessing room: ${roomId}`);
-      // Create message record
-      const messageObj = new Message({
+      console.log('Creating regular message');
+      // Create regular message
+      messageObj = new Message({
         room: roomId,
         sender: employeeId,
+        message: messageText,
         isRead: false,
         createdAt: getThaiTime(),
         isImage: false,
-        imageUrl: "http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/65166.jpg",
-        isAdminNotification: isAdminNotification || false,
-        ...(messageText ? { message: messageText } : {})
+        imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
+        isAdminNotification: isAdminNotification || false
       });
-
       await messageObj.save();
-      messages.push(messageObj);
-      console.log('Message saved to database:', messageObj._id);
-
-      // Update room's lastMessage and increment unreadCount for all members except sender
-      await Room.findByIdAndUpdate(roomId, {
-        $set: {
-          lastMessage: {
-            message: messageText,
-            sender: employeeId,
-            timestamp: messageObj.createdAt,
-            isoString: getThaiTimeISOString(messageObj.createdAt),
-            isImage: false,
-            imageUrl: null,
-            isAdminNotification: isAdminNotification || false
-          }
-        },
-        $inc: {
-          'unreadCounts.$[elem].count': 1
-        }
-      }, {
-        arrayFilters: [{ 'elem.user': { $ne: employeeId } }]
-      });
-      console.log('Room updated with new lastMessage');
-
-      // Emit message through Socket.IO
-      const io = req.app.get('io');
-      if (io) {
-        try {
-          console.log(`Attempting to emit message to room ${roomId}`);
-          console.log('Connected sockets in room:', io.sockets.adapter.rooms.get(roomId.toString()));
-          
-          io.to(roomId).emit('newMessage', {
-            _id: messageObj._id,
-            room: roomId,
-            sender: {
-              employeeID: bot.employeeID,
-              fullName: bot.name,
-              department: 'bot notify',
-              role: 'bot',
-              imgUrl: 'http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/65166.jpg'
-            },
-            timestamp: messageObj.createdAt,
-            isRead: false,
-            isImage: false,
-            imageUrl: null,
-            isAdminNotification: isAdminNotification || false,
-            ...(messageText ? { message: messageText } : {}),
-            success: true
-          }, (response) => {
-            if (response && response.error) {
-              console.error(`Error broadcasting message to room ${roomId}:`, response.error);
-            } else {
-              console.log(`Message broadcasted to room ${roomId} successfully`);
-              console.log('Message details:', {
-                roomId,
-                messageId: messageObj._id,
-                timestamp: messageObj.createdAt,
-                sender: bot.name
-              });
-            }
-          });
-
-          // Update chat list for all room members
-          const updateChatList = req.app.get('updateChatList');
-          if (updateChatList) {
-            await updateChatList(roomId);
-          }
-        } catch (error) {
-          console.error(`Error emitting message to room ${roomId}:`, error);
-        }
-      } else {
-        console.error('Socket.IO instance not found');
-      }
     }
 
-    // Update bot's requestCount
-    await Bot.findOneAndUpdate(
-      { employeeID: employeeId },
-      { $inc: { requestCount: 1 } }
-    );
-    console.log('Bot requestCount updated');
+    console.log('Message saved to database:', messageObj._id);
 
-    console.log('=== End Bot Send Debug Logs ===\n');
+    // Update room's lastMessage
+    const lastMessageData = {
+      message: messageText,
+      sender: employeeId,
+      timestamp: messageObj.createdAt,
+      isoString: getThaiTimeISOString(messageObj.createdAt),
+      isImage: false,
+      imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
+      isAdminNotification: isAdminNotification || false
+    };
+
+    // ✅ Add reply information to lastMessage if it's a reply
+    if (replyToId) {
+      lastMessageData.isReply = true;
+      lastMessageData.replyToId = replyToId;
+    }
+
+    await Room.findByIdAndUpdate(roomId, {
+      $set: { lastMessage: lastMessageData },
+      $inc: { 'unreadCounts.$[elem].count': 1 }
+    }, {
+      arrayFilters: [{ 'elem.user': { $ne: employeeId } }]
+    });
+
+    // ✅ Emit message through Socket.IO with reply data
+    const socketData = {
+      _id: messageObj._id,
+      room: roomId,
+      sender: sender,
+      message: messageText,
+      timestamp: messageObj.createdAt,
+      isRead: false,
+      isImage: false,
+      imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
+      isAdminNotification: isAdminNotification || false,
+      success: true
+    };
+
+    // Add reply data if it's a reply
+    if (replyToId && messageObj.replyToMessage) {
+      socketData.isReply = true;
+      socketData.replyTo = messageObj.replyTo;
+      socketData.replyToMessage = {
+        ...messageObj.replyToMessage,
+        sender: replyToSenderDetails // Include sender details in the reply message
+      };
+    }
+
+    io.to(roomId).emit('newMessage', socketData);
+    console.log(`Message broadcasted to room ${roomId} successfully`);
+
+    // Response data
+    const responseData = {
+      _id: messageObj._id,
+      room: messageObj.room,
+      sender: sender,
+      message: messageText,
+      timestamp: messageObj.createdAt,
+      isRead: messageObj.isRead,
+      isImage: false,
+      imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
+      isAdminNotification: messageObj.isAdminNotification
+    };
+
+    // Add reply data to response if it's a reply
+    if (replyToId && messageObj.replyToMessage) {
+      responseData.isReply = true;
+      responseData.replyTo = messageObj.replyTo;
+      responseData.replyToMessage = {
+        ...messageObj.replyToMessage,
+        sender: replyToSenderDetails // Include sender details in the response
+      };
+    }
 
     res.json({
       statusCode: 200,
-      message: 'ส่งข้อความสำเร็จ',
-      data: messages.map(message => ({
-        _id: message._id,
-        room: message.room,
-        sender: {
-          employeeID: bot.employeeID,
-          fullName: bot.name,
-          department: 'bot notify',
-          role: 'bot',
-          imgUrl: 'http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/65166.jpg'
-        },
-        timestamp: message.createdAt,
-        isRead: message.isRead,
-        isImage: false,
-        imageUrl: null,
-        isAdminNotification: isAdminNotification || false,
-        ...(message.message ? { message: message.message } : {})
-      }))
+      message: replyToId ? 'ส่งข้อความตอบกลับสำเร็จ' : 'ส่งข้อความสำเร็จ',
+      data: responseData
     });
 
   } catch (error) {
-    console.error('Error sending bot messages:', error);
+    console.error('Error sending message:', error);
     res.status(500).json({ 
       statusCode: 500,
       message: 'เกิดข้อผิดพลาดในการส่งข้อความ',
@@ -448,11 +268,17 @@ router.post('/bot-send', async (req, res) => {
   }
 });
 
-// Upload image to room
+// ✅ Upload image to room - อัพเดทให้รองรับ reply
 router.post('/upload', upload.single('image'), async (req, res) => {
   try {
-    const { roomId, employeeId } = req.body;
+    const { roomId, employeeId, message, replyToId } = req.body;
     const imageFile = req.file;
+
+    console.log('=== Upload Image Debug ===');
+    console.log('Room ID:', roomId);
+    console.log('Employee ID:', employeeId);
+    console.log('Reply to ID:', replyToId || 'Not a reply');
+    console.log('Optional message:', message);
 
     if (!imageFile) {
       return res.status(400).json({
@@ -461,23 +287,12 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       });
     }
 
-    // Get user details from LDAP
-    const userDetails = await findUserByEmployeeId(employeeId);
-    if (!userDetails.success || !userDetails.user) {
-      // Delete uploaded file if user not found
-      fs.unlinkSync(imageFile.path);
-      return res.status(404).json({ 
-        statusCode: 404,
-        message: 'ไม่พบข้อมูลผู้ใช้ในระบบ' 
-      });
-    }
-
-    const user = userDetails.user;
+    // Get sender details
+    const sender = await getSenderDetails(employeeId);
 
     // Check if room exists
     const room = await Room.findById(roomId);
     if (!room) {
-      // Delete uploaded file if room not found
       fs.unlinkSync(imageFile.path);
       return res.status(404).json({ 
         statusCode: 404,
@@ -485,85 +300,113 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       });
     }
 
-    // Create message record for the image
-    const messageObj = new Message({
-      room: roomId,
-      sender: employeeId,
-      isRead: false,
-      createdAt: getThaiTime(),
-      isImage: true,
-      imageUrl: `/uploads/rooms/${roomId}/${path.basename(imageFile.path)}`
-    });
+    const imageUrl = `/uploads/rooms/${roomId}/${path.basename(imageFile.path)}`;
+    let messageObj;
 
-    await messageObj.save();
+    // ✅ Check if this is a reply message
+    if (replyToId) {
+      console.log('Creating reply image message');
+      messageObj = await Message.createReply({
+        roomId,
+        sender: employeeId,
+        message: message || '',
+        replyToId,
+        isImage: true,
+        imageUrl
+      });
+    } else {
+      console.log('Creating regular image message');
+      // Create regular image message
+      messageObj = new Message({
+        room: roomId,
+        sender: employeeId,
+        message: message || '',
+        isRead: false,
+        createdAt: getThaiTime(),
+        isImage: true,
+        imageUrl
+      });
+      await messageObj.save();
+    }
+
+    console.log('Image message saved:', messageObj._id);
 
     // Update room's lastMessage
+    const lastMessageData = {
+      message: message || '',
+      sender: employeeId,
+      timestamp: messageObj.createdAt,
+      isoString: getThaiTimeISOString(messageObj.createdAt),
+      isImage: true,
+      imageUrl
+    };
+
+    // Add reply information if it's a reply
+    if (replyToId) {
+      lastMessageData.isReply = true;
+      lastMessageData.replyToId = replyToId;
+    }
+
     await Room.findByIdAndUpdate(roomId, {
-      $set: {
-        lastMessage: {
-          message: '',
-          sender: employeeId,
-          timestamp: messageObj.createdAt,
-          isoString: getThaiTimeISOString(messageObj.createdAt),
-          isImage: true,
-          imageUrl: `/uploads/rooms/${roomId}/${path.basename(imageFile.path)}`
-        }
-      },
-      $inc: {
-        'unreadCounts.$[elem].count': 1
-      }
+      $set: { lastMessage: lastMessageData },
+      $inc: { 'unreadCounts.$[elem].count': 1 }
     }, {
       arrayFilters: [{ 'elem.user': { $ne: employeeId } }]
     });
 
-    // Emit message through Socket.IO
+    // Emit through Socket.IO
     const io = req.app.get('io');
     if (io) {
-      try {
-        io.to(roomId).emit('newMessage', {
-          _id: messageObj._id,
-          room: roomId,
-          sender: {
-            employeeID: user.employeeID,
-            fullName: user.fullName,
-            department: user.department,
-            imgUrl: user.imgUrl || null
-          },
-          timestamp: messageObj.createdAt,
-          isRead: false,
-          isImage: true,
-          imageUrl: `/uploads/rooms/${roomId}/${path.basename(imageFile.path)}`,
-          success: true
-        });
-      } catch (error) {
-        console.error(`Error emitting image message to room ${roomId}:`, error);
+      const socketData = {
+        _id: messageObj._id,
+        room: roomId,
+        sender: sender,
+        message: message || '',
+        timestamp: messageObj.createdAt,
+        isRead: false,
+        isImage: true,
+        imageUrl,
+        success: true
+      };
+
+      // Add reply data if it's a reply
+      if (replyToId && messageObj.replyToMessage) {
+        socketData.isReply = true;
+        socketData.replyTo = messageObj.replyTo;
+        socketData.replyToMessage = messageObj.replyToMessage;
       }
+
+      io.to(roomId).emit('newMessage', socketData);
+      console.log('Image message broadcasted successfully');
+    }
+
+    // Response data
+    const responseData = {
+      _id: messageObj._id,
+      room: roomId,
+      sender: sender,
+      message: message || '',
+      timestamp: messageObj.createdAt,
+      isRead: false,
+      isImage: true,
+      imageUrl
+    };
+
+    // Add reply data to response
+    if (replyToId && messageObj.replyToMessage) {
+      responseData.isReply = true;
+      responseData.replyTo = messageObj.replyTo;
+      responseData.replyToMessage = messageObj.replyToMessage;
     }
 
     res.json({
       statusCode: 200,
-      message: 'อัพโหลดรูปภาพสำเร็จ',
-      data: {
-        _id: messageObj._id,
-        room: roomId,
-        sender: {
-          employeeID: user.employeeID,
-          fullName: user.fullName,
-          department: user.department,
-          imgUrl: user.imgUrl || null
-        },
-        timestamp: messageObj.createdAt,
-        isRead: false,
-        isImage: true,
-        imageUrl: `/uploads/rooms/${roomId}/${path.basename(imageFile.path)}`
-      }
+      message: replyToId ? 'ส่งรูปภาพตอบกลับสำเร็จ' : 'อัพโหลดรูปภาพสำเร็จ',
+      data: responseData
     });
 
   } catch (error) {
-    // Delete uploaded file if error occurs
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
-    }
+    if (req.file) fs.unlinkSync(req.file.path);
     console.error('Error uploading image:', error);
     res.status(500).json({ 
       statusCode: 500,
@@ -573,7 +416,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
-// Get message history for a room
+// ✅ Get message history for a room - อัพเดทให้รวม reply data
 router.get('/room/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -591,77 +434,24 @@ router.get('/room/:roomId', async (req, res) => {
     // Get unique sender IDs (excluding null)
     const senderIds = [...new Set(messages.map(m => m.sender).filter(id => id !== null))];
     
-    // Separate bot and user IDs
-    const botIds = [];
-    const userIds = [];
-    
     // Get user and bot details
-    const userPromises = [];
-    const botPromises = [];
-    
-    for (const id of senderIds) {
-      // Check if sender is a bot
-      const botUser = await User.findOne({ employeeID: id, role: 'bot' });
-      if (botUser) {
-        botIds.push(id);
-        botPromises.push(Bot.findOne({ employeeID: id }));
-      } else {
-        userIds.push(id);
-        userPromises.push(findUserByEmployeeId(id));
+    const senderMap = {};
+    for (const senderId of senderIds) {
+      try {
+        const senderDetails = await getSenderDetails(senderId);
+        senderMap[senderId] = senderDetails;
+      } catch (error) {
+        console.warn(`Failed to get sender details for ${senderId}:`, error.message);
+        senderMap[senderId] = null;
       }
     }
-    
-    // Get all user and bot details
-    const [userResults, botResults] = await Promise.all([
-      Promise.all(userPromises),
-      Promise.all(botPromises)
-    ]);
-    
-    // Create maps for both users and bots
-    const userMap = userResults.reduce((map, result) => {
-      if (result.success && result.user) {
-        map[result.user.employeeID] = result.user;
-      }
-      return map;
-    }, {});
 
-    const botMap = botResults.reduce((map, bot) => {
-      if (bot) {
-        map[bot.employeeID] = {
-          employeeID: bot.employeeID,
-          fullName: bot.name,
-          department: 'bot notify',
-          role: 'bot',
-          imgUrl: null
-        };
-      }
-      return map;
-    }, {});
-
+    // ✅ Format messages with reply data
     const formattedMessages = messages.map(message => {
-      // Handle null sender
-      if (message.sender === null) {
-        return {
-          _id: message._id,
-          room: message.room,
-          sender: null,
-          timestamp: message.createdAt,
-          isRead: message.isRead,
-          isImage: message.isImage,
-          imageUrl: message.imageUrl,
-          isAdminNotification: message.isAdminNotification,
-          ...(message.message ? { message: message.message } : {})
-        };
-      }
-
-      // Check if sender is a bot
-      const isBot = botIds.includes(message.sender);
-      const sender = isBot ? botMap[message.sender] : userMap[message.sender];
-
-      return {
+      const baseMessage = {
         _id: message._id,
         room: message.room,
-        sender: sender || null,
+        sender: message.sender ? senderMap[message.sender] : null,
         timestamp: message.createdAt,
         isRead: message.isRead,
         isImage: message.isImage,
@@ -669,6 +459,15 @@ router.get('/room/:roomId', async (req, res) => {
         isAdminNotification: message.isAdminNotification,
         ...(message.message ? { message: message.message } : {})
       };
+
+      // ✅ Add reply data if message is a reply
+      if (message.replyTo && message.replyToMessage) {
+        baseMessage.isReply = true;
+        baseMessage.replyTo = message.replyTo;
+        baseMessage.replyToMessage = message.replyToMessage;
+      }
+
+      return baseMessage;
     });
 
     res.json({
@@ -690,7 +489,120 @@ router.get('/room/:roomId', async (req, res) => {
   }
 });
 
-// Mark messages as read
+// ✅ NEW: Get message with its replies
+router.get('/message/:messageId/replies', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    // Check if original message exists
+    const originalMessage = await Message.findById(messageId);
+    if (!originalMessage) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'ไม่พบข้อความที่ระบุ'
+      });
+    }
+
+    // Get replies
+    const replies = await Message.find({ replyTo: messageId })
+      .sort({ createdAt: 1 }) // Sort oldest first for thread view
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const totalReplies = await Message.countDocuments({ replyTo: messageId });
+
+    // Get sender details for original message and replies
+    const allMessages = [originalMessage, ...replies];
+    const senderIds = [...new Set(allMessages.map(m => m.sender).filter(id => id))];
+    
+    const senderMap = {};
+    for (const senderId of senderIds) {
+      try {
+        const senderDetails = await getSenderDetails(senderId);
+        senderMap[senderId] = senderDetails;
+      } catch (error) {
+        console.warn(`Failed to get sender details for ${senderId}:`, error.message);
+        senderMap[senderId] = null;
+      }
+    }
+
+    // Format original message
+    const formattedOriginalMessage = {
+      _id: originalMessage._id,
+      message: originalMessage.message || '',
+      sender: senderMap[originalMessage.sender] || null,
+      timestamp: originalMessage.createdAt,
+      isImage: originalMessage.isImage,
+      imageUrl: originalMessage.imageUrl,
+      isRead: originalMessage.isRead,
+      replyCount: totalReplies
+    };
+
+    // Format replies
+    const formattedReplies = replies.map(reply => ({
+      _id: reply._id,
+      message: reply.message || '',
+      sender: senderMap[reply.sender] || null,
+      timestamp: reply.createdAt,
+      isImage: reply.isImage,
+      imageUrl: reply.imageUrl,
+      isRead: reply.isRead,
+      isReply: true,
+      replyTo: reply.replyTo,
+      replyToMessage: reply.replyToMessage
+    }));
+
+    res.json({
+      statusCode: 200,
+      data: {
+        originalMessage: formattedOriginalMessage,
+        replies: formattedReplies,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalReplies / limit),
+          totalReplies,
+          hasMore: page * limit < totalReplies
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting message replies:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการดึงข้อมูลการตอบกลับ',
+      error: error.message
+    });
+  }
+});
+
+// ✅ NEW: Get reply count for a message
+router.get('/message/:messageId/reply-count', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+
+    const replyCount = await Message.countDocuments({ replyTo: messageId });
+
+    res.json({
+      statusCode: 200,
+      data: {
+        messageId,
+        replyCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting reply count:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการนับจำนวนการตอบกลับ',
+      error: error.message
+    });
+  }
+});
+
+// Mark messages as read (existing endpoint - no changes needed)
 router.post('/mark-read', async (req, res) => {
   try {
     const { messageIds, employeeId } = req.body;
@@ -753,14 +665,14 @@ router.post('/mark-read', async (req, res) => {
   }
 });
 
-// Get message history for a user
+// ✅ Get message history for a user - อัพเดทให้รวม reply data
 router.get('/user/:employeeId', async (req, res) => {
   try {
     const { employeeId } = req.params;
     const { page = 1, limit = 20 } = req.query;
     const skip = (page - 1) * limit;
 
-    // Get user details from LDAP
+    // Get user details
     const userDetails = await findUserByEmployeeId(employeeId);
     if (!userDetails.success || !userDetails.user) {
       return res.status(404).json({ 
@@ -769,8 +681,13 @@ router.get('/user/:employeeId', async (req, res) => {
       });
     }
 
-    // Get user's rooms from Room model
-    const rooms = await Room.find({ members: employeeId });
+    // Get user's rooms
+    const rooms = await Room.find({
+      $or: [
+        { 'members.empId': employeeId },
+        { 'admin.empId': employeeId }
+      ]
+    });
     const roomIds = rooms.map(room => room._id);
 
     // Get messages from user's rooms
@@ -785,80 +702,26 @@ router.get('/user/:employeeId', async (req, res) => {
       room: { $in: roomIds }
     });
 
-    // Get unique sender IDs (excluding null)
+    // Get sender details
     const senderIds = [...new Set(messages.map(m => m.sender).filter(id => id !== null))];
+    const senderMap = {};
     
-    // Separate bot and user IDs
-    const botIds = [];
-    const userIds = [];
-    
-    // Get user and bot details
-    const userPromises = [];
-    const botPromises = [];
-    
-    for (const id of senderIds) {
-      // Check if sender is a bot
-      const botUser = await User.findOne({ employeeID: id, role: 'bot' });
-      if (botUser) {
-        botIds.push(id);
-        botPromises.push(Bot.findOne({ employeeID: id }));
-      } else {
-        userIds.push(id);
-        userPromises.push(findUserByEmployeeId(id));
+    for (const senderId of senderIds) {
+      try {
+        const senderDetails = await getSenderDetails(senderId);
+        senderMap[senderId] = senderDetails;
+      } catch (error) {
+        console.warn(`Failed to get sender details for ${senderId}:`, error.message);
+        senderMap[senderId] = null;
       }
     }
-    
-    // Get all user and bot details
-    const [userResults, botResults] = await Promise.all([
-      Promise.all(userPromises),
-      Promise.all(botPromises)
-    ]);
-    
-    // Create maps for both users and bots
-    const userMap = userResults.reduce((map, result) => {
-      if (result.success && result.user) {
-        map[result.user.employeeID] = result.user;
-      }
-      return map;
-    }, {});
 
-    const botMap = botResults.reduce((map, bot) => {
-      if (bot) {
-        map[bot.employeeID] = {
-          employeeID: bot.employeeID,
-          fullName: bot.name,
-          department: 'bot notify',
-          role: 'bot',
-          imgUrl: null
-        };
-      }
-      return map;
-    }, {});
-
+    // ✅ Format messages with reply data
     const formattedMessages = messages.map(message => {
-      // Handle null sender
-      if (message.sender === null) {
-        return {
-          _id: message._id,
-          room: message.room,
-          sender: null,
-          timestamp: message.createdAt,
-          isRead: message.isRead,
-          isImage: message.isImage,
-          imageUrl: message.imageUrl,
-          isAdminNotification: message.isAdminNotification,
-          ...(message.message ? { message: message.message } : {})
-        };
-      }
-
-      // Check if sender is a bot
-      const isBot = botIds.includes(message.sender);
-      const sender = isBot ? botMap[message.sender] : userMap[message.sender];
-
-      return {
+      const baseMessage = {
         _id: message._id,
         room: message.room,
-        sender: sender || null,
+        sender: message.sender ? senderMap[message.sender] : null,
         timestamp: message.createdAt,
         isRead: message.isRead,
         isImage: message.isImage,
@@ -866,6 +729,15 @@ router.get('/user/:employeeId', async (req, res) => {
         isAdminNotification: message.isAdminNotification,
         ...(message.message ? { message: message.message } : {})
       };
+
+      // Add reply data if message is a reply
+      if (message.replyTo && message.replyToMessage) {
+        baseMessage.isReply = true;
+        baseMessage.replyTo = message.replyTo;
+        baseMessage.replyToMessage = message.replyToMessage;
+      }
+
+      return baseMessage;
     });
 
     res.json({
@@ -887,4 +759,4 @@ router.get('/user/:employeeId', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;  
