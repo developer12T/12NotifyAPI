@@ -54,6 +54,7 @@ const upload = multer({
   }
 });
 
+
 // ✅ Helper function to get sender details
 async function getSenderDetails(employeeId) {
   // Check if sender is a bot
@@ -85,6 +86,7 @@ async function getSenderDetails(employeeId) {
     };
   }
 }
+
 
 // ✅ Send message to room (text only) - อัพเดทให้รองรับ reply
 router.post('/send', async (req, res) => {
@@ -134,17 +136,16 @@ router.post('/send', async (req, res) => {
       // Get the original message to reply to
       const originalMessage = await Message.findById(replyToId);
       if (originalMessage) {
-        // Get sender details for the original message
-        const replyToSenderResult = await findUserByEmployeeId(originalMessage.sender);
-        if (replyToSenderResult.success) {
-          replyToSenderDetails = {
-            employeeID: replyToSenderResult.user.employeeID,
-            fullName: replyToSenderResult.user.fullName,
-            department: replyToSenderResult.user.department,
-            profileImage: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${replyToSenderResult.user.employeeID}.jpg`,
-            role: originalMessage.sender === room.admin.empId ? room.admin.role : 
-                  room.members.find(m => m.empId === originalMessage.sender)?.role || 'User'
-          };
+        // Get sender details for the original message using getSenderDetails
+        try {
+          replyToSenderDetails = await getSenderDetails(originalMessage.sender);
+          // Add profileImage URL for users
+          if (replyToSenderDetails.role !== 'bot') {
+            replyToSenderDetails.profileImage = `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${replyToSenderDetails.employeeID}.jpg`;
+          }
+        } catch (error) {
+          console.warn('Failed to get reply sender details:', error.message);
+          replyToSenderDetails = null;
         }
       }
 
@@ -158,7 +159,16 @@ router.post('/send', async (req, res) => {
 
       // Add sender details to the reply message
       if (messageObj.replyToMessage) {
-        messageObj.replyToMessage.sender = replyToSenderDetails;
+        messageObj.replyToMessage = {
+          ...messageObj.replyToMessage,
+          sender: replyToSenderDetails ? {
+            employeeID: replyToSenderDetails.employeeID,
+            fullName: replyToSenderDetails.fullName,
+            department: replyToSenderDetails.department,
+            profileImage: replyToSenderDetails.role === 'bot' ? replyToSenderDetails.imgUrl : replyToSenderDetails.profileImage,
+            role: replyToSenderDetails.role
+          } : null
+        };
       }
     } else {
       console.log('Creating regular message');
@@ -222,7 +232,13 @@ router.post('/send', async (req, res) => {
       socketData.replyTo = messageObj.replyTo;
       socketData.replyToMessage = {
         ...messageObj.replyToMessage,
-        sender: replyToSenderDetails // Include sender details in the reply message
+        sender: replyToSenderDetails ? {
+          employeeID: replyToSenderDetails.employeeID,
+          fullName: replyToSenderDetails.fullName,
+          department: replyToSenderDetails.department,
+          profileImage: replyToSenderDetails.role === 'bot' ? replyToSenderDetails.imgUrl : replyToSenderDetails.profileImage,
+          role: replyToSenderDetails.role
+        } : null
       };
     }
 
@@ -248,7 +264,13 @@ router.post('/send', async (req, res) => {
       responseData.replyTo = messageObj.replyTo;
       responseData.replyToMessage = {
         ...messageObj.replyToMessage,
-        sender: replyToSenderDetails // Include sender details in the response
+        sender: replyToSenderDetails ? {
+          employeeID: replyToSenderDetails.employeeID,
+          fullName: replyToSenderDetails.fullName,
+          department: replyToSenderDetails.department,
+          profileImage: replyToSenderDetails.role === 'bot' ? replyToSenderDetails.imgUrl : replyToSenderDetails.profileImage,
+          role: replyToSenderDetails.role
+        } : null
       };
     }
 
@@ -267,6 +289,7 @@ router.post('/send', async (req, res) => {
     });
   }
 });
+
 
 // ✅ Upload image to room - อัพเดทให้รองรับ reply
 router.post('/upload', upload.single('image'), async (req, res) => {
@@ -415,6 +438,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
     });
   }
 });
+
 
 // ✅ Get message history for a room - อัพเดทให้รวม reply data
 router.get('/room/:roomId', async (req, res) => {
@@ -755,6 +779,169 @@ router.get('/user/:employeeId', async (req, res) => {
       statusCode: 500,
       message: 'เกิดข้อผิดพลาดในการดึงข้อความ',
       error: error.message 
+    });
+  }
+});
+
+// Delete message
+router.delete('/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { employeeId } = req.body; // ID ของผู้ใช้ที่ต้องการลบข้อความ
+
+    console.log('=== Delete Message Debug ===');
+    console.log('Message ID:', messageId);
+    console.log('Employee ID:', employeeId);
+
+    // Find the message
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'ไม่พบข้อความที่ต้องการลบ'
+      });
+    }
+
+    // Get room details
+    const room = await Room.findById(message.room);
+    if (!room) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'ไม่พบห้องแชท'
+      });
+    }
+
+    // Check permissions
+    const isMessageSender = message.sender === employeeId;
+    const isRoomAdmin = room.admin.empId === employeeId;
+    const isHrOrAdmin = await User.findOne({ 
+      employeeID: employeeId, 
+      role: { $in: ['admin', 'Hr'] } 
+    });
+
+    if (!isMessageSender && !isRoomAdmin && !isHrOrAdmin) {
+      return res.status(403).json({
+        statusCode: 403,
+        message: 'คุณไม่มีสิทธิ์ลบข้อความนี้'
+      });
+    }
+
+    // If message has an image, delete the image file
+    if (message.isImage && message.imageUrl) {
+      const imagePath = path.join(__dirname, '..', '..', message.imageUrl);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    }
+
+    // Delete the message
+    await message.deleteOne();
+
+    // Update room's lastMessage if the deleted message was the last message
+    const lastMessage = await Message.findOne({ room: message.room })
+      .sort({ createdAt: -1 })
+      .limit(1);
+
+    if (lastMessage) {
+      // Get sender details for the new last message
+      const senderDetails = await getSenderDetails(lastMessage.sender);
+      const lastMessageData = {
+        message: lastMessage.message,
+        sender: lastMessage.sender, // ใช้แค่ employeeID
+        timestamp: lastMessage.createdAt,
+        isoString: getThaiTimeISOString(lastMessage.createdAt),
+        isImage: lastMessage.isImage,
+        imageUrl: lastMessage.imageUrl,
+        isAdminNotification: lastMessage.isAdminNotification
+      };
+
+      // Add reply information if it's a reply
+      if (lastMessage.replyTo && lastMessage.replyToMessage) {
+        lastMessageData.isReply = true;
+        lastMessageData.replyToId = lastMessage.replyTo;
+      }
+
+      await Room.findByIdAndUpdate(message.room, {
+        $set: { lastMessage: lastMessageData }
+      });
+    } else {
+      // If no messages left, clear lastMessage
+      await Room.findByIdAndUpdate(message.room, {
+        $set: { lastMessage: null }
+      });
+    }
+
+    // Notify room members through socket
+    const io = req.app.get('io');
+    if (io) {
+      // ส่ง event messageDeleted พร้อมข้อมูลที่จำเป็น
+      const socketData = {
+        messageId,
+        roomId: message.room,
+        deletedBy: {
+          employeeID: employeeId,
+          // เพิ่มข้อมูลผู้ลบเพื่อแสดงในแชท
+          ...(await getSenderDetails(employeeId))
+        },
+        timestamp: new Date(),
+        lastMessage: null // เตรียมข้อมูล lastMessage ใหม่
+      };
+
+      // ถ้ามีข้อความล่าสุด ให้เพิ่มข้อมูล lastMessage
+      if (lastMessage) {
+        const senderDetails = await getSenderDetails(lastMessage.sender);
+        socketData.lastMessage = {
+          message: lastMessage.message,
+          sender: {
+            employeeID: senderDetails.employeeID,
+            fullName: senderDetails.fullName,
+            department: senderDetails.department,
+            profileImage: senderDetails.role === 'bot' ? senderDetails.imgUrl : 
+              `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${senderDetails.employeeID}.jpg`,
+            role: senderDetails.role
+          },
+          timestamp: lastMessage.createdAt,
+          isoString: getThaiTimeISOString(lastMessage.createdAt),
+          isImage: lastMessage.isImage,
+          imageUrl: lastMessage.imageUrl,
+          isAdminNotification: lastMessage.isAdminNotification
+        };
+
+        // เพิ่มข้อมูล reply ถ้ามี
+        if (lastMessage.replyTo && lastMessage.replyToMessage) {
+          socketData.lastMessage.isReply = true;
+          socketData.lastMessage.replyToId = lastMessage.replyTo;
+        }
+      }
+
+      // ส่ง event ไปยังทุกคนในห้อง
+      io.to(message.room.toString()).emit('messageDeleted', socketData);
+
+      // อัพเดท chat list สำหรับทุกคน
+      const updateChatList = req.app.get('updateChatList');
+      if (updateChatList) {
+        await updateChatList(message.room);
+      }
+
+      console.log('Message deletion broadcasted to room:', message.room);
+    }
+
+    res.json({
+      statusCode: 200,
+      message: 'ลบข้อความสำเร็จ',
+      data: {
+        messageId,
+        roomId: message.room,
+        deletedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Error deleting message:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการลบข้อความ',
+      error: error.message
     });
   }
 });
