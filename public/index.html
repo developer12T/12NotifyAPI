@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Room Notifications</title>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .room-selector {
+            margin-bottom: 20px;
+        }
+        select {
+            padding: 8px;
+            font-size: 16px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            width: 100%;
+            max-width: 300px;
+        }
+        .notifications {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .notification {
+            background-color: #f8f9fa;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .notification .sender {
+            font-weight: bold;
+            color: #007bff;
+        }
+        .notification .timestamp {
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+        .notification .message {
+            margin-top: 5px;
+        }
+        .pagination {
+            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        .pagination button {
+            padding: 8px 16px;
+            border: 1px solid #007bff;
+            background-color: white;
+            color: #007bff;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .pagination button:disabled {
+            background-color: #e9ecef;
+            color: #6c757d;
+            cursor: not-allowed;
+        }
+        .pagination button.active {
+            background-color: #007bff;
+            color: white;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Room Notifications</h1>
+        
+        <div class="room-selector">
+            <label for="roomSelect">Select Room:</label>
+            <select id="roomSelect">
+                <option value="">Loading rooms...</option>
+            </select>
+        </div>
+
+        <div class="notifications" id="notifications">
+            <p>Select a room to view notifications</p>
+        </div>
+
+        <div class="pagination" id="pagination">
+            <!-- Pagination buttons will be added here -->
+        </div>
+    </div>
+
+    <script>
+        // Connect to Socket.IO server
+        const socket = io("http://localhost:3000", {
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            rememberUpgrade: true,
+            timeout: 60000,
+            autoConnect: true
+        });
+
+        // Get user ID from localStorage or URL parameter
+        const userId = "68157dbb276931a5df285833";
+        
+        if (!userId) {
+            alert('User ID is required');
+            window.location.href = '/login';
+        }
+
+        let currentPage = 1;
+        let totalPages = 1;
+        let currentRoomId = null;
+
+        // Socket connection status handling
+        socket.on('connect', () => {
+            console.log('Socket connected with ID:', socket.id);
+            // Rejoin current room if any
+            if (currentRoomId) {
+                socket.emit('joinRoom', currentRoomId);
+            }
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Socket disconnected');
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('Connection error:', error);
+        });
+
+        socket.on('error', (error) => {
+            console.error('Socket error:', error);
+        });
+
+        // Handle new notifications
+        socket.on('newNotification', (notification) => {
+            console.log('New notification received:', notification);
+            if (currentRoomId === notification.roomId) {
+                const notificationsDiv = document.getElementById('notifications');
+                const notificationElement = document.createElement('div');
+                notificationElement.className = 'notification';
+                
+                const timestamp = new Date(notification.timestamp).toLocaleString();
+                
+                notificationElement.innerHTML = `
+                    <div class="sender">${notification.sender}</div>
+                    <div class="timestamp">${timestamp}</div>
+                    <div class="message">${notification.message}</div>
+                `;
+                
+                notificationsDiv.insertBefore(notificationElement, notificationsDiv.firstChild);
+            }
+        });
+
+        // Join a room
+        function joinRoom(roomId) {
+            if (currentRoomId) {
+                socket.emit('leaveRoom', currentRoomId, (response) => {
+                    if (response.success) {
+                        console.log(`Left room: ${currentRoomId}`);
+                    } else {
+                        console.error('Error leaving room:', response.error);
+                    }
+                });
+            }
+            currentRoomId = roomId;
+            socket.emit('joinRoom', roomId, (response) => {
+                if (response.success) {
+                    console.log(`Joined room: ${roomId}`);
+                    fetchNotifications(roomId);
+                } else {
+                    console.error('Error joining room:', response.error);
+                }
+            });
+        }
+
+        // Handle room selection change
+        document.getElementById('roomSelect').addEventListener('change', (e) => {
+            const roomId = e.target.value;
+            if (roomId) {
+                joinRoom(roomId);
+            }
+        });
+
+        // Fetch user's rooms
+        async function fetchRooms() {
+            try {
+                const response = await fetch(`http://localhost:3000/api/users/${userId}/rooms`);
+                const rooms = await response.json();
+                
+                const roomSelect = document.getElementById('roomSelect');
+                roomSelect.innerHTML = '';
+                
+                if (rooms.length === 0) {
+                    roomSelect.innerHTML = '<option value="">No rooms available</option>';
+                    return;
+                }
+
+                rooms.forEach(room => {
+                    const option = document.createElement('option');
+                    option.value = room._id;
+                    option.textContent = room.name;
+                    roomSelect.appendChild(option);
+                });
+
+                // Join the first room by default
+                if (rooms.length > 0) {
+                    joinRoom(rooms[0]._id);
+                }
+            } catch (error) {
+                console.error('Error fetching rooms:', error);
+            }
+        }
+
+        // Fetch notification history
+        async function fetchNotifications(roomId, page = 1) {
+            try {
+                const notificationsDiv = document.getElementById('notifications');
+                notificationsDiv.innerHTML = '<div class="loading">Loading notifications...</div>';
+
+                const response = await fetch(`http://localhost:3000/api/notifications/room/${roomId}?page=${page}`);
+                const data = await response.json();
+                
+                currentPage = data.currentPage;
+                totalPages = data.totalPages;
+                
+                displayNotifications(data.notifications);
+                updatePagination();
+            } catch (error) {
+                console.error('Error fetching notifications:', error);
+                document.getElementById('notifications').innerHTML = 
+                    '<div class="loading">Error loading notifications</div>';
+            }
+        }
+
+        // Display notifications
+        function displayNotifications(notifications) {
+            const notificationsDiv = document.getElementById('notifications');
+            notificationsDiv.innerHTML = '';
+
+            if (notifications.length === 0) {
+                notificationsDiv.innerHTML = '<p>No notifications found</p>';
+                return;
+            }
+
+            notifications.forEach(notification => {
+                const notificationElement = document.createElement('div');
+                notificationElement.className = 'notification';
+                
+                const timestamp = new Date(notification.createdAt).toLocaleString();
+                
+                notificationElement.innerHTML = `
+                    <div class="sender">${notification.sender.username}</div>
+                    <div class="timestamp">${timestamp}</div>
+                    <div class="message">${notification.message}</div>
+                `;
+                
+                notificationsDiv.appendChild(notificationElement);
+            });
+        }
+
+        // Update pagination buttons
+        function updatePagination() {
+            const paginationDiv = document.getElementById('pagination');
+            paginationDiv.innerHTML = '';
+
+            // Previous button
+            const prevButton = document.createElement('button');
+            prevButton.textContent = 'Previous';
+            prevButton.disabled = currentPage === 1;
+            prevButton.onclick = () => {
+                if (currentPage > 1) {
+                    fetchNotifications(currentRoomId, currentPage - 1);
+                }
+            };
+            paginationDiv.appendChild(prevButton);
+
+            // Page numbers
+            for (let i = 1; i <= totalPages; i++) {
+                const pageButton = document.createElement('button');
+                pageButton.textContent = i;
+                pageButton.className = i === currentPage ? 'active' : '';
+                pageButton.onclick = () => fetchNotifications(currentRoomId, i);
+                paginationDiv.appendChild(pageButton);
+            }
+
+            // Next button
+            const nextButton = document.createElement('button');
+            nextButton.textContent = 'Next';
+            nextButton.disabled = currentPage === totalPages;
+            nextButton.onclick = () => {
+                if (currentPage < totalPages) {
+                    fetchNotifications(currentRoomId, currentPage + 1);
+                }
+            };
+            paginationDiv.appendChild(nextButton);
+        }
+
+        // Initialize
+        fetchRooms();
+    </script>
+</body>
+</html> 
