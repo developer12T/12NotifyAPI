@@ -107,16 +107,15 @@
     </div>
 
     <script>
-        // Connect to Socket.IO server
-        const socket = io("http://localhost:3000", {
-            reconnection: true,
-            reconnectionAttempts: 5,
-            reconnectionDelay: 1000,
-            transports: ['websocket', 'polling'],
-            upgrade: true,
-            rememberUpgrade: true,
-            timeout: 60000,
-            autoConnect: true
+        // Initialize Socket.IO connections
+        const socket = io({
+            path: '/socket.io/',
+            transports: ['websocket']
+        });
+
+        const chatSocket = io('/chat', {
+            path: '/socket.io/',
+            transports: ['websocket']
         });
 
         // Get user ID from localStorage or URL parameter
@@ -131,9 +130,9 @@
         let totalPages = 1;
         let currentRoomId = null;
 
-        // Socket connection status handling
+        // Socket connection status handling for root namespace
         socket.on('connect', () => {
-            console.log('Socket connected with ID:', socket.id);
+            console.log('Root socket connected with ID:', socket.id);
             // Rejoin current room if any
             if (currentRoomId) {
                 socket.emit('joinRoom', currentRoomId);
@@ -141,19 +140,64 @@
         });
 
         socket.on('disconnect', () => {
-            console.log('Socket disconnected');
+            console.log('Root socket disconnected');
         });
 
         socket.on('connect_error', (error) => {
-            console.error('Connection error:', error);
+            console.error('Root connection error:', error);
         });
 
         socket.on('error', (error) => {
-            console.error('Socket error:', error);
+            console.error('Root socket error:', error);
         });
 
-        // Handle new notifications
-        socket.on('newNotification', (notification) => {
+        // Socket connection status handling for chat namespace
+        chatSocket.on('connect', () => {
+            console.log('Chat socket connected with ID:', chatSocket.id);
+            // Rejoin current room if any
+            if (currentRoomId) {
+                chatSocket.emit('joinRoom', currentRoomId);
+            }
+        });
+
+        chatSocket.on('disconnect', () => {
+            console.log('Chat socket disconnected');
+        });
+
+        chatSocket.on('connect_error', (error) => {
+            console.error('Chat connection error:', error);
+        });
+
+        chatSocket.on('error', (error) => {
+            console.error('Chat socket error:', error);
+        });
+
+        // Handle new messages from both namespaces
+        const handleNewMessage = (message) => {
+            console.log('New message received:', message);
+            if (currentRoomId === message.room) {
+                // Handle message display logic here
+                // ... existing message handling code ...
+            }
+        };
+
+        socket.on('newMessage', handleNewMessage);
+        chatSocket.on('newMessage', handleNewMessage);
+
+        // Handle message deletion from both namespaces
+        const handleMessageDeleted = (data) => {
+            console.log('Message deleted:', data);
+            if (currentRoomId === data.roomId) {
+                // Handle message deletion logic here
+                // ... existing message deletion handling code ...
+            }
+        };
+
+        socket.on('messageDeleted', handleMessageDeleted);
+        chatSocket.on('messageDeleted', handleMessageDeleted);
+
+        // Handle notifications from both namespaces
+        const handleNewNotification = (notification) => {
             console.log('New notification received:', notification);
             if (currentRoomId === notification.roomId) {
                 const notificationsDiv = document.getElementById('notifications');
@@ -170,7 +214,10 @@
                 
                 notificationsDiv.insertBefore(notificationElement, notificationsDiv.firstChild);
             }
-        });
+        };
+
+        socket.on('newNotification', handleNewNotification);
+        chatSocket.on('newNotification', handleNewNotification);
 
         // Join a room
         function joinRoom(roomId) {

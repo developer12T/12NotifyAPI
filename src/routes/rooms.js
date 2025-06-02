@@ -263,11 +263,17 @@ router.post('/:roomId/members', async (req, res) => {
     // Notify room members through socket about new members
     const io = req.app.get('io');
     if (io) {
-      io.to(roomId).emit('membersAdded', {
+      const chatIo = io.of('/chat');  // Add chat namespace
+      const memberData = {
         roomId,
         newMembers: addedMembers,
         timestamp: new Date()
-      });
+      };
+
+      // Emit to both namespaces
+      io.to(roomId).emit('membersAdded', memberData);
+      chatIo.to(roomId).emit('membersAdded', memberData);
+      console.log('Members added notification sent to both namespaces');
     }
 
     res.json({
@@ -337,7 +343,8 @@ router.delete('/:roomId/members/:userId', async (req, res) => {
     // Notify room members through socket
     const io = req.app.get('io');
     if (io) {
-      io.to(roomId).emit('memberRemoved', {
+      const chatIo = io.of('/chat');  // Add chat namespace
+      const memberData = {
         roomId,
         removedMember: removedUser ? {
           employeeID: removedUser.employeeID,
@@ -346,7 +353,12 @@ router.delete('/:roomId/members/:userId', async (req, res) => {
           profileImage: removedUser.profileImage
         } : null,
         timestamp: new Date()
-      });
+      };
+
+      // Emit to both namespaces
+      io.to(roomId).emit('memberRemoved', memberData);
+      chatIo.to(roomId).emit('memberRemoved', memberData);
+      console.log('Member removed notification sent to both namespaces');
     }
 
     res.json({
@@ -749,12 +761,18 @@ router.post('/notifications/read/:roomId', async (req, res) => {
     // Notify others in room through socket
     const io = req.app.get('io');
     if (io) {
-      io.to(roomId).emit('unreadCountUpdate', {
+      const chatIo = io.of('/chat');  // Add chat namespace
+      const updateData = {
         roomId,
         userId,
         count: 0,
         timestamp: new Date()
-      });
+      };
+
+      // Emit to both namespaces
+      io.to(roomId).emit('unreadCountUpdate', updateData);
+      chatIo.to(roomId).emit('unreadCountUpdate', updateData);
+      console.log('Unread count update sent to both namespaces');
     }
 
     res.json({
@@ -1054,12 +1072,19 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
     // Notify room members through socket about the update
     const io = req.app.get('io');
     if (io) {
+      const chatIo = io.of('/chat');  // Add chat namespace
       console.log('[Room Update] Emitting room update to members');
-      io.to(roomId).emit('roomUpdated', {
+      
+      const roomData = {
         roomId,
         updatedRoom: formattedRoom,
         timestamp: new Date()
-      });
+      };
+
+      // Emit to both namespaces
+      io.to(roomId).emit('roomUpdated', roomData);
+      chatIo.to(roomId).emit('roomUpdated', roomData);
+      console.log('[Room Update] Room update notification sent to both namespaces');
 
       // Also update chat list for all members
       const updateChatList = req.app.get('updateChatList');
