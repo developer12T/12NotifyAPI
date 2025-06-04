@@ -245,6 +245,23 @@ router.post('/send', async (req, res) => {
     io.to(roomId).emit('newMessage', socketData);
     console.log(`Message broadcasted to room ${roomId} successfully`);
 
+    // Emit notification event
+    const notificationData = {
+      roomId: roomId,
+      roomName: room.name,
+      message: messageText,
+      sender: {
+        employeeID: sender.employeeID,
+        fullName: sender.fullName,
+        department: sender.department,
+        role: sender.role
+      },
+      isImage: false,
+      timestamp: messageObj.createdAt
+    };
+    io.emit('newMessageNotification', notificationData);
+    console.log('Notification broadcasted for new message');
+
     // Response data
     const responseData = {
       _id: messageObj._id,
@@ -401,6 +418,24 @@ router.post('/upload', upload.single('image'), async (req, res) => {
 
       io.to(roomId).emit('newMessage', socketData);
       console.log('Image message broadcasted successfully');
+
+      // Emit notification event for image
+      const notificationData = {
+        roomId: roomId,
+        roomName: room.name,
+        message: message || 'ส่งรูปภาพ',
+        sender: {
+          employeeID: sender.employeeID,
+          fullName: sender.fullName,
+          department: sender.department,
+          role: sender.role
+        },
+        isImage: true,
+        imageUrl: imageUrl,
+        timestamp: messageObj.createdAt
+      };
+      io.emit('newMessageNotification', notificationData);
+      console.log('Notification broadcasted for new image message');
     }
 
     // Response data
