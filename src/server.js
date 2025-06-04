@@ -693,6 +693,7 @@ app.use('/api/rooms', require('./routes/rooms'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/announcements', require('./routes/announcements'));
+app.use('/api/direct-messages', require('./routes/directMessageRoutes'));
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

@@ -1,23 +1,25 @@
 const mongoose = require('mongoose');
 
-const messageSchema = new mongoose.Schema({
-  room: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Room',
+const directMessageSchema = new mongoose.Schema({
+  // ผู้ส่งและผู้รับข้อความ
+  participants: [{
+    type: String, // employeeID
+    required: true
+  }],
+  sender: {
+    type: String, // employeeID
     required: true,
     index: true
   },
-  sender: {
-    type: String,
-    required: true
-  },
+  // เนื้อหาข้อความ
   message: {
     type: String,
     required: function() {
-      return !this.isImage && !this.isFile; // Required only if not an image or file message
+      return !this.isImage && !this.isFile;
     },
     trim: true
-  }, 
+  },
+  // สถานะการอ่าน
   isRead: {
     type: Boolean,
     default: false
@@ -26,10 +28,13 @@ const messageSchema = new mongoose.Schema({
     user: String,
     readAt: Date
   }],
+  // ข้อมูลเวลาส่ง
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    index: true
   },
+  // รองรับการส่งรูปภาพ
   isImage: {
     type: Boolean,
     default: false
@@ -37,11 +42,11 @@ const messageSchema = new mongoose.Schema({
   imageUrl: {
     type: String,
     required: function() {
-      return this.isImage; // Required only if it's an image message
+      return this.isImage;
     },
     default: null
   },
-  // เพิ่ม fields สำหรับไฟล์
+  // รองรับการส่งไฟล์
   isFile: {
     type: Boolean,
     default: false
@@ -49,81 +54,78 @@ const messageSchema = new mongoose.Schema({
   fileUrl: {
     type: String,
     required: function() {
-      return this.isFile; // Required only if it's a file message
+      return this.isFile;
     },
     default: null
   },
   fileName: {
     type: String,
     required: function() {
-      return this.isFile; // Required only if it's a file message
+      return this.isFile;
     },
     default: null
   },
   fileType: {
     type: String,
     required: function() {
-      return this.isFile; // Required only if it's a file message
+      return this.isFile;
     },
     default: null
   },
-
+  // รองรับการตอบกลับข้อความ
   replyTo: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Message',
+    ref: 'DirectMessage',
     default: null,
     index: true
   },
-  // เก็บข้อมูลของข้อความที่ reply เพื่อไม่ต้อง populate ทุกครั้ง
+  // เก็บข้อมูลของข้อความที่ reply
   replyToMessage: {
     messageId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Message'
+      ref: 'DirectMessage'
     },
-    sender: String, // employeeID ของคนส่งข้อความต้นฉบับ
-    message: String, // เนื้อหาข้อความต้นฉบับ (สำหรับ text)
+    sender: String,
+    message: String,
     isImage: {
       type: Boolean,
       default: false
     },
-    imageUrl: String, // URL รูปภาพ (สำหรับ image message)
+    imageUrl: String,
     isFile: {
       type: Boolean,
       default: false
     },
-    fileUrl: String, // URL ไฟล์ (สำหรับ file message)
-    fileName: String, // ชื่อไฟล์ต้นฉบับ
-    fileType: String, // ประเภทไฟล์
-    createdAt: Date // วันที่ส่งข้อความต้นฉบับ
-  },
-  isAdminNotification: {
-    type: Boolean,
-    default: false
+    fileUrl: String,
+    fileName: String,
+    fileType: String,
+    createdAt: Date
   }
 });
 
 // Indexes for better query performance
-messageSchema.index({ room: 1, createdAt: -1 });
-messageSchema.index({ sender: 1 });
-messageSchema.index({ isRead: 1 });
-messageSchema.index({ isImage: 1 });
-messageSchema.index({ isAdminNotification: 1 });
-messageSchema.index({ replyTo: 1 }); // ✅ เพิ่ม index สำหรับ reply
-messageSchema.index({ 'replyToMessage.messageId': 1 }); // ✅ เพิ่ม index
+directMessageSchema.index({ participants: 1, createdAt: -1 });
+directMessageSchema.index({ sender: 1 });
+directMessageSchema.index({ isRead: 1 });
+directMessageSchema.index({ isImage: 1 });
+directMessageSchema.index({ replyTo: 1 });
+directMessageSchema.index({ 'replyToMessage.messageId': 1 });
 
-messageSchema.virtual('replyCount', {
-  ref: 'Message',
+// Virtual field สำหรับนับจำนวนการตอบกลับ
+directMessageSchema.virtual('replyCount', {
+  ref: 'DirectMessage',
   localField: '_id',
   foreignField: 'replyTo',
   count: true
 });
 
-messageSchema.methods.populateReplyData = async function() {
+// Method สำหรับ populate ข้อมูลการตอบกลับ
+directMessageSchema.methods.populateReplyData = async function() {
   if (this.replyTo) {
-    const replyToMessage = await mongoose.model('Message').findById(this.replyTo);
+    const replyToMessage = await mongoose.model('DirectMessage').findById(this.replyTo);
     if (replyToMessage) {
       this.replyToMessage = {
-        messageId: replyToMessage._id,
+        messageId: replyToMessage._id, 
         sender: replyToMessage.sender,
         message: replyToMessage.message || '',
         isImage: replyToMessage.isImage || false,
@@ -139,9 +141,10 @@ messageSchema.methods.populateReplyData = async function() {
   return this;
 };
 
-messageSchema.statics.createReply = async function(replyData) {
+// Static method สำหรับสร้างข้อความตอบกลับ
+directMessageSchema.statics.createReply = async function(replyData) {
   const { 
-    roomId, 
+    participants,
     sender, 
     message, 
     replyToId, 
@@ -159,14 +162,16 @@ messageSchema.statics.createReply = async function(replyData) {
     throw new Error('ไม่พบข้อความต้นฉบับที่ต้องการตอบกลับ');
   }
 
-  // ตรวจสอบว่าข้อความต้นฉบับอยู่ในห้องเดียวกัน
-  if (originalMessage.room.toString() !== roomId.toString()) {
-    throw new Error('ไม่สามารถตอบกลับข้อความจากห้องอื่นได้');
+  // ตรวจสอบว่าผู้ส่งและผู้รับตรงกับข้อความต้นฉบับ
+  const originalParticipants = new Set(originalMessage.participants);
+  const newParticipants = new Set(participants);
+  if (![...originalParticipants].every(p => newParticipants.has(p))) {
+    throw new Error('ไม่สามารถตอบกลับข้อความระหว่างผู้ใช้ที่แตกต่างกันได้');
   }
 
   // สร้างข้อความใหม่พร้อม reply data
   const newMessage = new this({
-    room: roomId,
+    participants,
     sender,
     message: isImage || isFile ? '' : message,
     isImage,
@@ -193,5 +198,4 @@ messageSchema.statics.createReply = async function(replyData) {
   return await newMessage.save();
 };
 
-
-module.exports = mongoose.model('Message', messageSchema); 
+module.exports = mongoose.model('DirectMessage', directMessageSchema); 

@@ -872,7 +872,7 @@ router.get('/:roomId', async (req, res) => {
   }
 });
 
-// Update room details
+// Update room details - Fixed version
 router.put('/:roomId', upload.single('image'), async (req, res) => {
   console.log('=== Room Update Request ===');
   console.log('Room ID:', req.params.roomId);
@@ -927,72 +927,98 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       }
       updateData.imageUrl = `/uploads/rooms/${req.file.filename}`;
     } else if (imageUrl) {
-      // If imageUrl was provided in the request but no file was uploaded
       updateData.imageUrl = imageUrl;
     }
 
-    // Handle admin update if provided
-    if (admin) {
-      console.log('[Room Update] Updating admin:', admin);
-      
-      // Get current admin info
-      const currentAdmin = room.admin;
-      
-      // Create new members array without the new admin (if they were a member)
-      let updatedMembers = room.members.filter(member => member.empId !== admin.empId);
-      
-      // Add previous admin to members list with member role
-      updatedMembers.push({
-        empId: currentAdmin.empId,
-        role: 'User'  // Set role to member for previous admin
+    // Handle admin change and members update together
+    let finalMembers = [...room.members]; // Copy current members
+    let finalAdmin = room.admin; // Keep current admin by default
+
+    // Case 1: Admin change requested (only if it's different from current admin)
+    if (admin && admin.empId && admin.empId !== room.admin.empId) {
+      console.log('[Room Update] Admin change requested:', {
+        currentAdmin: room.admin.empId,
+        newAdmin: admin.empId
       });
+
+      // Step 1: Check if new admin is currently a member and remove them
+      const newAdminMemberIndex = finalMembers.findIndex(member => member.empId === admin.empId);
       
-      // Update both admin and members
-      updateData.admin = {
-        empId: admin.empId,
-        role: admin.role || 'admin'
+      if (newAdminMemberIndex !== -1) {
+        // Remove new admin from members list (they'll become admin)
+        finalMembers.splice(newAdminMemberIndex, 1);
+        console.log('[Room Update] Removed new admin from members list');
+      }
+
+      // Step 2: IMPORTANT - Move current admin to members list with 'User' role
+      // This is the key part: current admin becomes a regular user
+      finalMembers.push({
+        empId: room.admin.empId,  // Current admin's empId
+        role: 'User'              // Demote to User role
+      });
+
+      // Step 3: Set new admin
+      finalAdmin = {
+        empId: admin.empId,       // New admin's empId
+        role: 'admin'             // Promote to admin role
       };
-      updateData.members = updatedMembers;
-      
-      console.log('[Room Update] Swapped admin positions:', {
-        newAdmin: admin.empId,
-        previousAdmin: currentAdmin.empId,
-        previousAdminNewRole: 'User',
-        totalMembers: updatedMembers.length,
-        membersList: updatedMembers.map(m => ({ empId: m.empId, role: m.role }))
+
+      console.log('[Room Update] Admin swap completed:', {
+        newAdmin: finalAdmin.empId,
+        formerAdminNowMember: room.admin.empId,
+        formerAdminNewRole: 'User'
       });
     }
 
-    // Handle members update if provided
+    // Case 2: Members update requested  
     if (members && Array.isArray(members)) {
-      console.log('[Room Update] Updating members:', members);
+      console.log('[Room Update] Members update requested');
       
-      // Check if current admin is in the new members list
-      const currentAdminInNewMembers = members.some(member => member.empId === room.admin.empId);
-      
-      // If current admin is in new members list, update their role to 'member'
-      if (currentAdminInNewMembers) {
-        console.log('[Room Update] Moving current admin to members with member role:', room.admin.empId);
-        const updatedMembers = members.map(member => {
-          if (member.empId === room.admin.empId) {
-            return {
-              empId: member.empId,
-              role: 'User'  // Set role to member for previous admin
-            };
-          }
-          return {
+      // If no admin change was requested OR admin is the same person, 
+      // make sure current admin is not in members list
+      if (!admin || !admin.empId || admin.empId === room.admin.empId) {
+        // Keep current admin, just update members (excluding current admin)
+        finalMembers = members
+          .filter(member => member.empId !== finalAdmin.empId)
+          .map(member => ({
             empId: member.empId,
             role: member.role || 'User'
-          };
-        });
-        updateData.members = updatedMembers;
+          }));
       } else {
-        updateData.members = members.map(member => ({
-          empId: member.empId,
-          role: member.role || 'User'
-        }));
+        // Admin was changed to a different person, handle members list accordingly
+        finalMembers = members
+          .filter(member => member.empId !== finalAdmin.empId) // Remove new admin from members
+          .map(member => ({
+            empId: member.empId,
+            role: member.role || 'User'
+          }));
+        
+        // Add former admin to members if not already included
+        const formerAdminInNewMembers = members.some(member => member.empId === room.admin.empId);
+        if (!formerAdminInNewMembers) {
+          finalMembers.push({
+            empId: room.admin.empId,
+            role: 'User'
+          });
+        }
       }
     }
+
+    // Remove duplicates from members array (just in case)
+    const uniqueMembers = finalMembers.filter((member, index, self) => 
+      index === self.findIndex(m => m.empId === member.empId)
+    );
+
+    // Update the room data
+    updateData.admin = finalAdmin;
+    updateData.members = uniqueMembers;
+
+    console.log('[Room Update] Final update data:', {
+      adminChanged: admin && admin.empId && admin.empId !== room.admin.empId,
+      admin: updateData.admin.empId,
+      memberCount: updateData.members.length,
+      members: updateData.members.map(m => ({ empId: m.empId, role: m.role }))
+    });
 
     // Update room details
     const updatedRoom = await Room.findByIdAndUpdate(
@@ -1090,7 +1116,7 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       error: error.message
     });
   }
-});
+}); 
 
 // Delete room
 router.delete('/:roomId', async (req, res) => {

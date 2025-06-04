@@ -1,0 +1,199 @@
+{
+	"info": {
+		"_postman_id": "direct-message-api",
+		"name": "Direct Message API",
+		"description": "Collection สำหรับทดสอบ Direct Message API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "ส่งข้อความใหม่",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{token}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "participants",
+							"value": "[\"EMP001\", \"EMP002\"]",
+							"type": "text",
+							"description": "Array ของ employeeID ที่เกี่ยวข้อง"
+						},
+						{
+							"key": "message",
+							"value": "สวัสดีครับ",
+							"type": "text",
+							"description": "เนื้อหาข้อความ"
+						},
+						{
+							"key": "replyToId",
+							"value": "",
+							"type": "text",
+							"description": "ID ของข้อความที่ต้องการตอบกลับ (ถ้ามี)"
+						},
+						{
+							"key": "file",
+							"type": "file",
+							"description": "ไฟล์หรือรูปภาพที่ต้องการส่ง (ถ้ามี)"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/direct-message/send",
+					"host": ["{{base_url}}"],
+					"path": ["api", "direct-message", "send"]
+				},
+				"description": "ส่งข้อความใหม่ สามารถส่งได้ทั้งข้อความปกติ, รูปภาพ, ไฟล์ และการตอบกลับ"
+			}
+		},
+		{
+			"name": "ดึงประวัติการสนทนา",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{token}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/direct-message/conversation/EMP002?page=1&limit=20",
+					"host": ["{{base_url}}"],
+					"path": ["api", "direct-message", "conversation", "EMP002"],
+					"query": [
+						{
+							"key": "page",
+							"value": "1",
+							"description": "หมายเลขหน้า"
+						},
+						{
+							"key": "limit",
+							"value": "20",
+							"description": "จำนวนข้อความต่อหน้า"
+						}
+					]
+				},
+				"description": "ดึงประวัติการสนทนาระหว่างผู้ใช้ปัจจุบันกับผู้ใช้อื่น"
+			}
+		},
+		{
+			"name": "ดึงรายการสนทนาล่าสุด",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{token}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/direct-message/conversations?page=1&limit=20",
+					"host": ["{{base_url}}"],
+					"path": ["api", "direct-message", "conversations"],
+					"query": [
+						{
+							"key": "page",
+							"value": "1",
+							"description": "หมายเลขหน้า"
+						},
+						{
+							"key": "limit",
+							"value": "20",
+							"description": "จำนวนการสนทนาต่อหน้า"
+						}
+					]
+				},
+				"description": "ดึงรายการสนทนาล่าสุดทั้งหมดของผู้ใช้"
+			}
+		},
+		{
+			"name": "อัพเดทสถานะการอ่าน",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{token}}",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"messageIds\": [\"message_id_1\", \"message_id_2\"]\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/direct-message/mark-read",
+					"host": ["{{base_url}}"],
+					"path": ["api", "direct-message", "mark-read"]
+				},
+				"description": "อัพเดทสถานะการอ่านของหลายข้อความพร้อมกัน"
+			}
+		},
+		{
+			"name": "ลบข้อความ",
+			"request": {
+				"method": "DELETE",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{token}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/direct-message/message_id_1",
+					"host": ["{{base_url}}"],
+					"path": ["api", "direct-message", "message_id_1"]
+				},
+				"description": "ลบข้อความและไฟล์ที่เกี่ยวข้อง (เฉพาะผู้ส่งเท่านั้นที่ลบได้)"
+			}
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [""]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [""]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "your_jwt_token_here",
+			"type": "string"
+		}
+	]
+} 

@@ -31,29 +31,73 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({
-  storage: storage,
-  fileFilter: function (req, file, cb) {
-    // Check file extension
-    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-    const ext = path.extname(file.originalname).toLowerCase();
+// Configure multer for document upload
+const documentStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const roomId = req.body.roomId;
+    const uploadDir = path.join(__dirname, '../../uploads/rooms', roomId, 'documents');
     
-    // Check both mimetype and extension
-    if (!file.mimetype.startsWith('image/') || !allowedExtensions.includes(ext)) {
-      console.log('File validation failed:', {
-        filename: file.originalname,
-        mimetype: file.mimetype,
-        extension: ext
-      });
-      return cb(new Error('Only image files (jpg, jpeg, png, gif, webp) are allowed!'), false);
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
-    cb(null, true);
+    
+    cb(null, uploadDir);
   },
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
+  filename: function (req, file, cb) {
+    // Generate unique filename with timestamp and original name
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const originalName = path.basename(file.originalname, ext);
+    // Keep original filename but add timestamp to prevent duplicates
+    cb(null, `${originalName}-${uniqueSuffix}${ext}`);
   }
 });
 
+// File type validation function
+const fileFilter = (req, file, cb) => {
+  // Get file extension
+  const ext = path.extname(file.originalname).toLowerCase();
+  
+  // Define allowed file types
+  const allowedImageTypes = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  const allowedDocumentTypes = [
+    // PDF
+    '.pdf',
+    // Excel
+    '.xls', '.xlsx', '.xlsm', '.xlsb', '.xlt', '.xltx', '.xltm',
+    // Word
+    '.doc', '.docx', '.docm', '.dot', '.dotx', '.dotm'
+  ];
+
+  // Check if it's an image upload
+  if (req.path === '/upload' && file.mimetype.startsWith('image/') && allowedImageTypes.includes(ext)) {
+    cb(null, true);
+  }
+  // Check if it's a document upload
+  else if (req.path === '/upload-file' && allowedDocumentTypes.includes(ext)) {
+    cb(null, true);
+  }
+  else {
+    cb(new Error('Invalid file type! Allowed types: Images (jpg, jpeg, png, gif, webp) or Documents (pdf, xls, xlsx, doc, docx, etc.)'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit for images
+  }
+});
+
+const uploadDocument = multer({
+  storage: documentStorage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 20 * 1024 * 1024 // 20MB limit for documents
+  }
+});
 
 // ✅ Helper function to get sender details
 async function getSenderDetails(employeeId) {
@@ -977,6 +1021,190 @@ router.delete('/:messageId', async (req, res) => {
       statusCode: 500,
       message: 'เกิดข้อผิดพลาดในการลบข้อความ',
       error: error.message
+    });
+  }
+});
+
+// ✅ Upload file to room (PDF, Excel, Word) - อัพเดทให้รองรับ reply
+router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
+  try {
+    const { roomId, employeeId, message, replyToId } = req.body;
+    const file = req.file;
+
+    console.log('=== Upload File Debug ===');
+    console.log('Room ID:', roomId);
+    console.log('Employee ID:', employeeId);
+    console.log('Reply to ID:', replyToId || 'Not a reply');
+    console.log('Optional message:', message);
+    console.log('File:', file ? {
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size
+    } : 'No file');
+
+    if (!file) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'กรุณาเลือกไฟล์'
+      });
+    }
+
+    // Get sender details
+    const sender = await getSenderDetails(employeeId);
+
+    // Check if room exists
+    const room = await Room.findById(roomId);
+    if (!room) {
+      fs.unlinkSync(file.path);
+      return res.status(404).json({ 
+        statusCode: 404,
+        message: 'ไม่พบห้องแชท' 
+      });
+    }
+
+    const fileUrl = `/uploads/rooms/${roomId}/documents/${path.basename(file.path)}`;
+    const fileType = path.extname(file.originalname).toLowerCase();
+    let messageObj;
+
+    // ✅ Check if this is a reply message
+    if (replyToId) {
+      console.log('Creating reply file message');
+      messageObj = await Message.createReply({
+        roomId,
+        sender: employeeId,
+        message: message || '',
+        replyToId,
+        isFile: true,
+        fileUrl,
+        fileName: file.originalname,
+        fileType
+      });
+    } else {
+      console.log('Creating regular file message');
+      // Create regular file message
+      messageObj = new Message({
+        room: roomId,
+        sender: employeeId,
+        message: message || '',
+        isRead: false,
+        createdAt: getThaiTime(),
+        isFile: true,
+        fileUrl,
+        fileName: file.originalname,
+        fileType
+      });
+      await messageObj.save();
+    }
+
+    console.log('File message saved:', messageObj._id);
+
+    // Update room's lastMessage
+    const lastMessageData = {
+      message: message || file.originalname,
+      sender: employeeId,
+      timestamp: messageObj.createdAt,
+      isoString: getThaiTimeISOString(messageObj.createdAt),
+      isFile: true,
+      fileUrl,
+      fileName: file.originalname,
+      fileType
+    };
+
+    // Add reply information if it's a reply
+    if (replyToId) {
+      lastMessageData.isReply = true;
+      lastMessageData.replyToId = replyToId;
+    }
+
+    await Room.findByIdAndUpdate(roomId, {
+      $set: { lastMessage: lastMessageData },
+      $inc: { 'unreadCounts.$[elem].count': 1 }
+    }, {
+      arrayFilters: [{ 'elem.user': { $ne: employeeId } }]
+    });
+
+    // Emit through Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      const socketData = {
+        _id: messageObj._id,
+        room: roomId,
+        sender: sender,
+        message: message || '',
+        timestamp: messageObj.createdAt,
+        isRead: false,
+        isFile: true,
+        fileUrl,
+        fileName: file.originalname,
+        fileType,
+        success: true
+      };
+
+      // Add reply data if it's a reply
+      if (replyToId && messageObj.replyToMessage) {
+        socketData.isReply = true;
+        socketData.replyTo = messageObj.replyTo;
+        socketData.replyToMessage = messageObj.replyToMessage;
+      }
+
+      io.to(roomId).emit('newMessage', socketData);
+      console.log('File message broadcasted successfully');
+
+      // Emit notification event for file
+      const notificationData = {
+        roomId: roomId,
+        roomName: room.name,
+        message: message || `ส่งไฟล์ ${file.originalname}`,
+        sender: {
+          employeeID: sender.employeeID,
+          fullName: sender.fullName,
+          department: sender.department,
+          role: sender.role
+        },
+        isFile: true,
+        fileUrl: fileUrl,
+        fileName: file.originalname,
+        fileType: fileType,
+        timestamp: messageObj.createdAt
+      };
+      io.emit('newMessageNotification', notificationData);
+      console.log('Notification broadcasted for new file message');
+    }
+
+    // Response data
+    const responseData = {
+      _id: messageObj._id,
+      room: roomId,
+      sender: sender,
+      message: message || '',
+      timestamp: messageObj.createdAt,
+      isRead: false,
+      isFile: true,
+      fileUrl,
+      fileName: file.originalname,
+      fileType
+    };
+
+    // Add reply data to response
+    if (replyToId && messageObj.replyToMessage) {
+      responseData.isReply = true;
+      responseData.replyTo = messageObj.replyTo;
+      responseData.replyToMessage = messageObj.replyToMessage;
+    }
+
+    res.json({
+      statusCode: 200,
+      message: replyToId ? 'ส่งไฟล์ตอบกลับสำเร็จ' : 'อัพโหลดไฟล์สำเร็จ',
+      data: responseData
+    });
+
+  } catch (error) {
+    if (req.file) fs.unlinkSync(req.file.path);
+    console.error('Error uploading file:', error);
+    res.status(500).json({ 
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการอัพโหลดไฟล์',
+      error: error.message 
     });
   }
 });
