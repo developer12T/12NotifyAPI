@@ -120,8 +120,6 @@ router.post('/send', async (req, res) => {
 
     // Get io instance
     const io = req.app.get('io');
-    const chatIo = io.of('/chat');  // Add chat namespace
-
     if (!io) {
       return res.status(500).json({ 
         statusCode: 500,
@@ -244,10 +242,8 @@ router.post('/send', async (req, res) => {
       };
     }
 
-    // Emit to both namespaces
     io.to(roomId).emit('newMessage', socketData);
-    chatIo.to(roomId).emit('newMessage', socketData);
-    console.log(`Message broadcasted to room ${roomId} successfully (both namespaces)`);
+    console.log(`Message broadcasted to room ${roomId} successfully`);
 
     // Response data
     const responseData = {
@@ -403,10 +399,8 @@ router.post('/upload', upload.single('image'), async (req, res) => {
         socketData.replyToMessage = messageObj.replyToMessage;
       }
 
-      // Emit to both namespaces
       io.to(roomId).emit('newMessage', socketData);
-      chatIo.to(roomId).emit('newMessage', socketData);
-      console.log('Image message broadcasted successfully (both namespaces)');
+      console.log('Image message broadcasted successfully');
     }
 
     // Response data

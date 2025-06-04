@@ -57,30 +57,18 @@ router.post('/send', upload.single('image'), async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       try {
-        const chatIo = io.of('/chat');  // Add chat namespace
-        const announcementData = {
+        io.emit('newAnnouncement', {
           statusCode: 200,
           message: 'Announcement created successfully',
           data: {
             ...announcement.toObject(),
             createdByUser: userData
           }
-        };
-
-        // Emit to both namespaces
-        io.emit('newAnnouncement', announcementData, (response) => {
+        }, (response) => {
           if (response && response.error) {
-            console.error('Error broadcasting announcement to root namespace:', response.error);
+            console.error('Error broadcasting announcement:', response.error);
           } else {
-            console.log('📡 Emitted newAnnouncement event to root namespace');
-          }
-        });
-
-        chatIo.emit('newAnnouncement', announcementData, (response) => {
-          if (response && response.error) {
-            console.error('Error broadcasting announcement to chat namespace:', response.error);
-          } else {
-            console.log('📡 Emitted newAnnouncement event to chat namespace');
+            console.log('📡 Emitted newAnnouncement event to all connected clients');
           }
         });
       } catch (error) {
