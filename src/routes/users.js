@@ -110,7 +110,25 @@ router.get('/:id/rooms', async (req, res) => {
     }).populate('members', 'username')
       .populate('admin', 'username');
 
-    res.json(rooms);
+    // Format rooms with basic details
+    const formattedRooms = rooms.map(room => {
+      const adminMember = room.members.find(member => member.role === 'admin');
+      return {
+        id: room._id,
+        name: room.name,
+        description: room.description,
+        color: room.color,
+        admin: adminMember ? {
+          employeeID: adminMember.empId,
+          role: adminMember.role
+        } : null,
+        memberCount: room.members.length,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      };
+    });
+
+    res.json(formattedRooms);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -409,19 +427,22 @@ router.get('/bot/:employeeID', async (req, res) => {
     } : null;
 
     // Format rooms with basic details
-    const formattedRooms = rooms.map(room => ({
-      id: room._id,
-      name: room.name,
-      description: room.description,
-      color: room.color,
-      admin: {
-        employeeID: room.admin.empId,
-        role: room.admin.role
-      },
-      memberCount: room.members.length,
-      createdAt: room.createdAt,
-      updatedAt: room.updatedAt
-    }));
+    const formattedRooms = rooms.map(room => {
+      const adminMember = room.members.find(member => member.role === 'admin');
+      return {
+        id: room._id,
+        name: room.name,
+        description: room.description,
+        color: room.color,
+        admin: adminMember ? {
+          employeeID: adminMember.empId,
+          role: adminMember.role
+        } : null,
+        memberCount: room.members.length,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      };
+    });
 
     // Format bot details with rooms
     const formattedBot = {
@@ -541,19 +562,22 @@ router.put('/update-bot', async (req, res) => {
     });
 
     // Format rooms with basic details
-    const formattedRooms = updatedRooms.map(room => ({
-      id: room._id,
-      name: room.name,
-      description: room.description,
-      color: room.color,
-      admin: {
-        employeeID: room.admin.empId,
-        role: room.admin.role
-      },
-      memberCount: room.members.length,
-      createdAt: room.createdAt,
-      updatedAt: room.updatedAt
-    }));
+    const formattedRooms = updatedRooms.map(room => {
+      const adminMember = room.members.find(member => member.role === 'admin');
+      return {
+        id: room._id,
+        name: room.name,
+        description: room.description,
+        color: room.color,
+        admin: adminMember ? {
+          employeeID: adminMember.empId,
+          role: adminMember.role
+        } : null,
+        memberCount: room.members.length,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      };
+    });
 
     // Format response
     const formattedBot = {

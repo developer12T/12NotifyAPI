@@ -961,7 +961,7 @@ router.delete('/:messageId', async (req, res) => {
 
     // Check permissions
     const isMessageSender = message.sender === employeeId;
-    const isRoomAdmin = room.admin.empId === employeeId;
+    const isRoomAdmin = room.members.some(member => member.empId === employeeId && member.role === 'admin');
     const isHrOrAdmin = await User.findOne({ 
       employeeID: employeeId, 
       role: { $in: ['admin', 'Hr'] } 

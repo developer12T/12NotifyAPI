@@ -142,7 +142,7 @@ io.on('connection', (socket) => {
           description: room.description,
           color: room.color,
           members: room.members,
-          admin: room.admin
+          admin: room.members.find(member => member.role === 'admin')
         }
       });
 
@@ -510,8 +510,14 @@ io.on('connection', (socket) => {
           description: room.description,
           imageUrl: room.imageUrl,
           color: room.color,
-          admin: room.admin ? room.admin.empId : null,
-          adminRole: room.admin ? room.admin.role : null,
+          admin: (() => {
+            const adminMember = room.members.find(member => member.role === 'admin');
+            return adminMember ? adminMember.empId : null;
+          })(),
+          adminRole: (() => {
+            const adminMember = room.members.find(member => member.role === 'admin');
+            return adminMember ? adminMember.role : null;
+          })(),
           userRole,
           lastMessage: formattedLastMessage,
           unreadCount,
@@ -951,9 +957,6 @@ io.on('connection', (socket) => {
 
       // Get all room members
       const memberIds = room.members.map(member => member.empId);
-      if (room.admin?.empId) {
-        memberIds.push(room.admin.empId);
-      }
       console.log('[Chat List] Room members:', memberIds);
 
       // Get last message
@@ -1024,8 +1027,14 @@ io.on('connection', (socket) => {
           name: room.name,
           description: room.description,
           color: room.color,
-          admin: room.admin ? room.admin.empId : null,
-          adminRole: room.admin ? room.admin.role : null,
+          admin: (() => {
+            const adminMember = room.members.find(member => member.role === 'admin');
+            return adminMember ? adminMember.empId : null;
+          })(),
+          adminRole: (() => {
+            const adminMember = room.members.find(member => member.role === 'admin');
+            return adminMember ? adminMember.role : null;
+          })(),
           userRole,
           lastMessage: formattedLastMessage,
           unreadCount,
