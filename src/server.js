@@ -37,6 +37,7 @@ app.use(express.static('public'));
 app.use('/uploads/announcements', express.static(path.join(__dirname, '../uploads/announcements')));
 // Serve static files for chat room images
 app.use('/uploads/rooms', express.static(path.join(__dirname, '../uploads/rooms')));
+
 app.use('/uploads/directMessage', express.static(path.join(__dirname, '../uploads/directMessage')));
 
 // MongoDB Connection
@@ -518,9 +519,13 @@ io.on('connection', (socket) => {
         };
       });
 
+      // คำนวณจำนวนข้อความที่ยังไม่ได้อ่านทั้งหมด
+      const totalUnreadCount = formattedRooms.reduce((total, room) => total + (room.unreadCount || 0), 0);
+
       // Send initial chat list
       socket.emit('chatListUpdate', {
         rooms: formattedRooms,
+        totalUnreadCount: totalUnreadCount,
         timestamp: new Date()
       });
 
@@ -542,6 +547,389 @@ io.on('connection', (socket) => {
       console.log(`User ${empId} unsubscribed from chat list updates`);
     }
   });
+
+  // ========== DIRECT MESSAGE HANDLERS ==========
+  
+  // Join Direct Message room
+  socket.on('joinDirectMessageRoom', async (data) => {
+    try {
+      const { employeeId, recipientId } = data;
+      if (!employeeId || !recipientId) {
+        throw new Error('Employee ID and Recipient ID are required');
+      }
+
+      // สร้าง room ID สำหรับ direct message
+      const [id1, id2] = [employeeId, recipientId].sort();
+      const directMessageRoomId = `dm-${id1}-${id2}`;
+
+      socket.join(directMessageRoomId);
+      console.log(`User ${employeeId} joined DirectMessage room: ${directMessageRoomId}`);
+      
+      // Acknowledge successful join
+      socket.emit('directMessageRoomJoined', { 
+        roomId: directMessageRoomId, 
+        success: true,
+        participants: [employeeId, recipientId]
+      });
+
+      // Notify other participant
+      socket.to(directMessageRoomId).emit('userJoinedDirectMessage', {
+        roomId: directMessageRoomId,
+        userId: employeeId,
+        timestamp: new Date()
+      });
+    } catch (error) {
+      console.error('Error joining DirectMessage room:', error);
+      socket.emit('directMessageRoomJoined', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Mark Direct Messages as Read
+  socket.on('markDirectMessagesRead', async (data) => {
+    try {
+      const { messageIds, employeeId } = data;
+      if (!Array.isArray(messageIds) || messageIds.length === 0 || !employeeId) {
+        throw new Error('Message IDs and Employee ID are required');
+      }
+
+      const DirectMessage = require('./models/DirectMessage');
+      const { findUserByEmployeeId } = require('./services/ldapServices');
+
+      // Update messages as read
+      const result = await DirectMessage.updateMany(
+        {
+          _id: { $in: messageIds },
+          participants: employeeId,
+          sender: { $ne: employeeId },
+          'readBy.user': { $ne: employeeId }
+        },
+        {
+          $set: { isRead: true },
+          $push: {
+            readBy: {
+              user: employeeId,
+              readAt: new Date()
+            }
+          }
+        }
+      );
+
+      if (result.modifiedCount > 0) {
+        // Get updated messages with full details
+        const updatedMessages = await DirectMessage.find({
+          _id: { $in: messageIds }
+        });
+
+        // Get sender details for all messages
+        const senderIds = [...new Set(updatedMessages.map(msg => msg.sender))];
+        const userPromises = senderIds.map(id => findUserByEmployeeId(id));
+        const userResults = await Promise.all(userPromises);
+        
+        const userMap = userResults.reduce((map, result) => {
+          if (result.success && result.user) {
+            map[result.user.employeeID] = result.user;
+          }
+          return map;
+        }, {});
+
+        // Send WebSocket notifications to senders
+        for (const senderId of senderIds) {
+          if (senderId !== employeeId) {
+            const readerDetails = await findUserByEmployeeId(employeeId);
+            if (readerDetails.success && readerDetails.user) {
+              // สร้าง room ID สำหรับ direct message
+              const [id1, id2] = [employeeId, senderId].sort();
+              const directMessageRoomId = `dm-${id1}-${id2}`;
+              
+              io.to(directMessageRoomId).emit('directMessagesRead', {
+                messageIds,
+                readBy: {
+                  employeeID: readerDetails.user.employeeID,
+                  fullName: readerDetails.user.fullNameThai,
+                  department: readerDetails.user.department,
+                  imgUrl: readerDetails.user.imgUrl || null
+                },
+                timestamp: new Date(),
+                isoString: new Date().toISOString()
+              });
+            }
+          }
+        }
+
+        // Acknowledge successful mark as read
+        socket.emit('directMessagesMarkedAsRead', {
+          success: true,
+          messageIds,
+          modifiedCount: result.modifiedCount
+        });
+      } else {
+        socket.emit('directMessagesMarkedAsRead', {
+          success: false,
+          message: 'No messages were marked as read'
+        });
+      }
+    } catch (error) {
+      console.error('Error marking direct messages as read:', error);
+      socket.emit('directMessagesMarkedAsRead', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Leave Direct Message room
+  socket.on('leaveDirectMessageRoom', async (data) => {
+    try {
+      const { employeeId, recipientId } = data;
+      if (!employeeId || !recipientId) {
+        throw new Error('Employee ID and Recipient ID are required');
+      }
+
+      // สร้าง room ID สำหรับ direct message
+      const [id1, id2] = [employeeId, recipientId].sort();
+      const directMessageRoomId = `dm-${id1}-${id2}`;
+
+      socket.leave(directMessageRoomId);
+      console.log(`User ${employeeId} left DirectMessage room: ${directMessageRoomId}`);
+      
+      // Acknowledge successful leave
+      socket.emit('directMessageRoomLeft', { 
+        roomId: directMessageRoomId, 
+        success: true 
+      });
+
+      // Notify other participant
+      socket.to(directMessageRoomId).emit('userLeftDirectMessage', {
+        roomId: directMessageRoomId,
+        userId: employeeId,
+        timestamp: new Date()
+      });
+    } catch (error) {
+      console.error('Error leaving DirectMessage room:', error);
+      socket.emit('directMessageRoomLeft', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Subscribe to Direct Message chat list
+  socket.on('subscribeDirectMessageList', async (data) => {
+    try {
+      const { empId } = data;
+      if (!empId) throw new Error('Employee ID is required');
+
+      // Join user's DM chat list room
+      const dmChatListRoom = `dmChatList:${empId}`;
+      socket.join(dmChatListRoom);
+      console.log(`User ${empId} subscribed to DirectMessage chat list updates`);
+
+      // Get initial DM chat list
+      const DirectMessage = require('./models/DirectMessage');
+      const { findUserByEmployeeId } = require('./services/ldapServices');
+
+      // Get conversations where empId is a participant
+      const conversations = await DirectMessage.aggregate([
+        {
+          $match: {
+            participants: empId
+          }
+        },
+        {
+          $sort: { createdAt: -1 }
+        },
+        {
+          $group: {
+            _id: {
+              $filter: {
+                input: '$participants',
+                as: 'participant',
+                cond: { $ne: ['$$participant', empId] }
+              }
+            },
+            lastMessage: { $first: '$$ROOT' },
+            unreadCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$sender', empId] },
+                      { $eq: ['$isRead', false] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            participantId: { $arrayElemAt: ['$_id', 0] },
+            lastMessage: 1,
+            unreadCount: 1,
+            _id: 0
+          }
+        }
+      ]);
+
+      // Get user details for all participants
+      const participantIds = conversations.map(conv => conv.participantId);
+      const userPromises = participantIds.map(id => findUserByEmployeeId(id));
+      const userResults = await Promise.all(userPromises);
+      
+      const userMap = userResults.reduce((map, result) => {
+        if (result.success && result.user) {
+          map[result.user.employeeID] = result.user;
+        }
+        return map;
+      }, {});
+
+      // Format conversations
+      const formattedConversations = conversations.map(conv => {
+        const participant = userMap[conv.participantId];
+        const lastMessage = conv.lastMessage;
+        
+        return {
+          participantId: conv.participantId,
+          participant: participant ? {
+            employeeID: participant.employeeID,
+            fullName: participant.fullNameThai,
+            department: participant.department,
+            imgUrl: participant.imgUrl || null
+          } : null,
+          lastMessage: {
+            _id: lastMessage._id,
+            message: lastMessage.message || '',
+            isImage: lastMessage.isImage || false,
+            imageUrl: lastMessage.imageUrl || null,
+            isFile: lastMessage.isFile || false,
+            fileUrl: lastMessage.fileUrl || null,
+            fileName: lastMessage.fileName || null,
+            fileType: lastMessage.fileType || null,
+            isRead: lastMessage.isRead || false,
+            sender: lastMessage.sender,
+            createdAt: lastMessage.createdAt,
+            isoString: lastMessage.createdAt.toISOString()
+          },
+          unreadCount: conv.unreadCount || 0
+        };
+      });
+
+      // คำนวณจำนวนแชทที่ยังไม่ได้อ่านทั้งหมด
+      const totalUnreadCount = formattedConversations.reduce((total, conv) => total + (conv.unreadCount || 0), 0);
+
+      // Send initial DM chat list
+      socket.emit('directMessageListUpdate', {
+        conversations: formattedConversations,
+        totalUnreadCount: totalUnreadCount,
+        timestamp: new Date()
+      });
+
+    } catch (error) {
+      console.error('Error subscribing to DirectMessage chat list:', error);
+      socket.emit('error', { 
+        message: 'Failed to subscribe to DirectMessage chat list',
+        error: error.message
+      });
+    }
+  });
+
+  // Unsubscribe from Direct Message chat list
+  socket.on('unsubscribeDirectMessageList', (data) => {
+    const { empId } = data;
+    if (empId) {
+      const dmChatListRoom = `dmChatList:${empId}`;
+      socket.leave(dmChatListRoom);
+      console.log(`User ${empId} unsubscribed from DirectMessage chat list updates`);
+    }
+  });
+
+  // Function to update Direct Message chat list
+  const updateDirectMessageChatList = async (employeeId, recipientId) => {
+    console.log('=== Direct Message Chat List Update ===');
+    console.log('Updating DM chat list for:', { employeeId, recipientId });
+    
+    try {
+      const DirectMessage = require('./models/DirectMessage');
+      const { findUserByEmployeeId } = require('./services/ldapServices');
+
+      // Get last message between these two users
+      const lastMessage = await DirectMessage.findOne({
+        participants: { $all: [employeeId, recipientId] }
+      }).sort({ createdAt: -1 });
+
+      if (!lastMessage) {
+        console.log('[DM Chat List] No messages found between users');
+        return;
+      }
+
+      // Get unread count for this conversation
+      const unreadCount = await DirectMessage.countDocuments({
+        participants: { $all: [employeeId, recipientId] },
+        sender: { $ne: employeeId },
+        isRead: false
+      });
+
+      // Get participant details
+      const participantDetails = await findUserByEmployeeId(recipientId);
+      const senderDetails = await findUserByEmployeeId(lastMessage.sender);
+
+      if (!participantDetails.success || !participantDetails.user) {
+        console.log('[DM Chat List] Participant not found:', recipientId);
+        return;
+      }
+
+      const formattedConversation = {
+        participantId: recipientId,
+        participant: {
+          employeeID: participantDetails.user.employeeID,
+          fullName: participantDetails.user.fullNameThai,
+          department: participantDetails.user.department,
+          imgUrl: participantDetails.user.imgUrl || null
+        },
+        lastMessage: {
+          _id: lastMessage._id,
+          message: lastMessage.message || '',
+          isImage: lastMessage.isImage || false,
+          imageUrl: lastMessage.imageUrl || null,
+          isFile: lastMessage.isFile || false,
+          fileUrl: lastMessage.fileUrl || null,
+          fileName: lastMessage.fileName || null,
+          fileType: lastMessage.fileType || null,
+          isRead: lastMessage.isRead || false,
+          sender: lastMessage.sender,
+          createdAt: lastMessage.createdAt,
+          isoString: lastMessage.createdAt.toISOString()
+        },
+        unreadCount: unreadCount
+      };
+
+      // Emit update to both participants' DM chat list rooms
+      io.to(`dmChatList:${employeeId}`).emit('directMessageListUpdate', {
+        conversations: [formattedConversation],
+        timestamp: new Date()
+      });
+      
+      io.to(`dmChatList:${recipientId}`).emit('directMessageListUpdate', {
+        conversations: [formattedConversation],
+        timestamp: new Date()
+      });
+
+      console.log('[DM Chat List] Update complete for users:', { employeeId, recipientId });
+    } catch (error) {
+      console.error('=== Direct Message Chat List Update Error ===');
+      console.error('Users:', { employeeId, recipientId });
+      console.error('Error details:', error);
+    }
+  };
+
+  // Make updateDirectMessageChatList available to routes
+  app.set('updateDirectMessageChatList', updateDirectMessageChatList);
 
   // Function to update chat list for all room members
   const updateChatList = async (roomId) => {
@@ -699,4 +1087,4 @@ app.use('/api/direct-messages', require('./routes/directMessageRoutes'));
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-}); 
+});

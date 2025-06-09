@@ -39,6 +39,9 @@ const storage = multer.diskStorage({
     const ext = path.extname(file.originalname);
     // เพิ่ม employeeId เข้าไปในชื่อไฟล์เพื่อระบุผู้ส่ง
     const employeeId = req.body.employeeId;
+    // Store original filename in metadata for later use
+    file.originalFilename = file.originalname;
+    // Use system filename for storage
     cb(null, `${employeeId}-${file.fieldname}-${uniqueSuffix}${ext}`);
   }
 });
@@ -173,8 +176,18 @@ router.post('/send', async (req, res) => {
       console.log('Emitting newDirectMessage to recipient:', recipientId);
       console.log('Socket data:', JSON.stringify(socketData, null, 2));
       
+      // สร้าง room ID สำหรับ direct message
+      const [id1, id2] = [employeeId, recipientId].sort();
+      const directMessageRoomId = `dm-${id1}-${id2}`;
+      
       // ส่งข้อความไปยังผู้รับ
-      io.to(recipientId).emit('newDirectMessage', socketData);
+      io.to(directMessageRoomId).emit('newDirectMessage', socketData);
+
+      // อัพเดทหน้ารายการแชท Direct Message
+      const updateDirectMessageChatList = req.app.get('updateDirectMessageChatList');
+      if (updateDirectMessageChatList) {
+        await updateDirectMessageChatList(employeeId, recipientId);
+      }
 
       // ส่ง notification
       const notificationData = {
@@ -299,9 +312,21 @@ router.post('/send', async (req, res) => {
 // ส่งรูปภาพ
 router.post('/upload', upload.single('image'), async (req, res) => {
   try {
-    const { recipientId, message, employeeId, replyToId } = req.body;
+    const { recipientId, message, employeeId, replyToId, fileName } = req.body;
     const image = req.file;
 
+    console.log('=== Direct Message Upload Image Debug ===');
+    console.log('Recipient ID:', recipientId);
+    console.log('Employee ID:', employeeId);
+    console.log('Reply to ID:', replyToId || 'Not a reply');
+    console.log('Optional message:', message);
+    console.log('Requested fileName:', fileName);
+    console.log('Image:', image ? {
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+      size: image.size,
+      encoding: image.encoding
+    } : 'No image');
 
     if (!recipientId || !employeeId) {
       return res.status(400).json({ 
@@ -346,6 +371,49 @@ router.post('/upload', upload.single('image'), async (req, res) => {
     // สร้าง URL สำหรับรูปภาพ (ปรับ path ให้สอดคล้องกับ folder structure ใหม่)
     const [id1, id2] = [employeeId, recipientId].sort();
     const imageUrl = `/uploads/directMessage/${id1}-${id2}/${image.filename}`;
+
+    // ใช้ชื่อไฟล์จาก request body หรือ fallback ไปที่ originalname
+    let originalFilename = fileName || image.originalname;
+    
+    // Fix UTF-8 encoding for Thai filenames - decode double-encoded Thai characters
+    try {
+      // ตรวจสอบว่าชื่อไฟล์มี Thai characters ที่ถูก encode ซ้ำหรือไม่
+      if (originalFilename.includes('%')) {
+        // ถ้ามี % แสดงว่าอาจเป็น URL encoded
+        originalFilename = decodeURIComponent(originalFilename);
+      }
+      
+      // ตรวจสอบการ encode ซ้ำแบบ latin1 -> utf8
+      const buffer = Buffer.from(originalFilename, 'latin1');
+      const decoded = buffer.toString('utf8');
+      
+      // ตรวจสอบว่าผลลัพธ์ที่ decode แล้วมี Thai characters ที่ถูกต้องหรือไม่
+      // Thai characters มักจะมี pattern นี้เมื่อถูก encode ซ้ำ
+      if (decoded.includes('à¸') || decoded.includes('à¹') || 
+          decoded.includes('à¸') || decoded.includes('à¹') ||
+          /[\u0E00-\u0E7F]/.test(decoded)) {
+        originalFilename = decoded;
+      }
+      
+      // ตรวจสอบการ encode แบบ base64
+      if (originalFilename.match(/^[A-Za-z0-9+/=]+$/) && originalFilename.length > 20) {
+        try {
+          const base64Decoded = Buffer.from(originalFilename, 'base64').toString('utf8');
+          if (/[\u0E00-\u0E7F]/.test(base64Decoded)) {
+            originalFilename = base64Decoded;
+          }
+        } catch (e) {
+          // ไม่ใช่ base64 ที่ถูกต้อง
+        }
+      }
+      
+    } catch (error) {
+      console.log('Filename encoding detection failed, using original:', originalFilename);
+    }
+
+    console.log('Original filename from request:', fileName);
+    console.log('Image originalname:', image.originalname);
+    console.log('Processed filename:', originalFilename);
 
     let newMessage;
     if (replyToId) {
@@ -429,6 +497,12 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       // ส่งข้อความไปยังผู้รับ
       io.to(recipientId).emit('newDirectMessage', socketData);
 
+      // อัพเดทหน้ารายการแชท Direct Message
+      const updateDirectMessageChatList = req.app.get('updateDirectMessageChatList');
+      if (updateDirectMessageChatList) {
+        await updateDirectMessageChatList(employeeId, recipientId);
+      }
+
       // ส่ง notification
       const notificationData = {
         _id: newMessage._id,
@@ -490,9 +564,12 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       } : null
     };
 
+    // Set proper response headers for UTF-8
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
     res.status(201).json({
       success: true,
-      message: 'ส่งรูปภาพสำเร็จ',
+      message: replyToId ? 'ส่งรูปภาพตอบกลับสำเร็จ' : 'ส่งรูปภาพสำเร็จ',
       data: formattedMessage
     });
   } catch (error) {
@@ -504,8 +581,21 @@ router.post('/upload', upload.single('image'), async (req, res) => {
 // ส่งไฟล์
 router.post('/upload-file', upload.single('file'), async (req, res) => {
   try {
-    const { recipientId, message, employeeId, replyToId } = req.body;
+    const { recipientId, message, employeeId, replyToId, fileName } = req.body;
     const file = req.file;
+
+    console.log('=== Direct Message Upload File Debug ===');
+    console.log('Recipient ID:', recipientId);
+    console.log('Employee ID:', employeeId);
+    console.log('Reply to ID:', replyToId || 'Not a reply');
+    console.log('Optional message:', message);
+    console.log('Requested fileName:', fileName);
+    console.log('File:', file ? {
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size,
+      encoding: file.encoding
+    } : 'No file');
 
     if (!recipientId || !employeeId) {
       return res.status(400).json({ 
@@ -550,6 +640,50 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
     // สร้าง URL สำหรับไฟล์ (ปรับ path ให้สอดคล้องกับ folder structure ใหม่)
     const [id1, id2] = [employeeId, recipientId].sort();
     const fileUrl = `/uploads/directMessage/${id1}-${id2}/${file.filename}`;
+    const fileType = path.extname(file.originalname).toLowerCase();
+    
+    // ใช้ชื่อไฟล์จาก request body หรือ fallback ไปที่ originalname
+    let originalFilename = fileName || file.originalname;
+    
+    // Fix UTF-8 encoding for Thai filenames - decode double-encoded Thai characters
+    try {
+      // ตรวจสอบว่าชื่อไฟล์มี Thai characters ที่ถูก encode ซ้ำหรือไม่
+      if (originalFilename.includes('%')) {
+        // ถ้ามี % แสดงว่าอาจเป็น URL encoded
+        originalFilename = decodeURIComponent(originalFilename);
+      }
+      
+      // ตรวจสอบการ encode ซ้ำแบบ latin1 -> utf8
+      const buffer = Buffer.from(originalFilename, 'latin1');
+      const decoded = buffer.toString('utf8');
+      
+      // ตรวจสอบว่าผลลัพธ์ที่ decode แล้วมี Thai characters ที่ถูกต้องหรือไม่
+      // Thai characters มักจะมี pattern นี้เมื่อถูก encode ซ้ำ
+      if (decoded.includes('à¸') || decoded.includes('à¹') || 
+          decoded.includes('à¸') || decoded.includes('à¹') ||
+          /[\u0E00-\u0E7F]/.test(decoded)) {
+        originalFilename = decoded;
+      }
+      
+      // ตรวจสอบการ encode แบบ base64
+      if (originalFilename.match(/^[A-Za-z0-9+/=]+$/) && originalFilename.length > 20) {
+        try {
+          const base64Decoded = Buffer.from(originalFilename, 'base64').toString('utf8');
+          if (/[\u0E00-\u0E7F]/.test(base64Decoded)) {
+            originalFilename = base64Decoded;
+          }
+        } catch (e) {
+          // ไม่ใช่ base64 ที่ถูกต้อง
+        }
+      }
+      
+    } catch (error) {
+      console.log('Filename encoding detection failed, using original:', originalFilename);
+    }
+
+    console.log('Original filename from request:', fileName);
+    console.log('File originalname:', file.originalname);
+    console.log('Processed filename:', originalFilename);
 
     let newMessage;
     if (replyToId) {
@@ -561,7 +695,7 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
         replyToId,
         isFile: true,
         fileUrl,
-        fileName: file.originalname,
+        fileName: originalFilename, // Use processed filename
         fileType: file.mimetype
       });
     } else {
@@ -572,7 +706,7 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
         message: message || '',
         isFile: true,
         fileUrl,
-        fileName: file.originalname,
+        fileName: originalFilename, // Use processed filename
         fileType: file.mimetype
       });
       await newMessage.save();
@@ -611,7 +745,7 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
         isRead: false,
         isFile: true,
         fileUrl: newMessage.fileUrl,
-        fileName: newMessage.fileName,
+        fileName: originalFilename, // Use processed filename
         fileType: newMessage.fileType,
         replyTo: newMessage.replyTo || null,
         replyToMessage: newMessage.replyToMessage ? {
@@ -639,6 +773,12 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
       // ส่งข้อความไปยังผู้รับ
       io.to(recipientId).emit('newDirectMessage', socketData);
 
+      // อัพเดทหน้ารายการแชท Direct Message
+      const updateDirectMessageChatList = req.app.get('updateDirectMessageChatList');
+      if (updateDirectMessageChatList) {
+        await updateDirectMessageChatList(employeeId, recipientId);
+      }
+
       // ส่ง notification
       const notificationData = {
         _id: newMessage._id,
@@ -654,7 +794,7 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
         isRead: false,
         isFile: true,
         fileUrl: newMessage.fileUrl,
-        fileName: newMessage.fileName,
+        fileName: originalFilename, // Use processed filename
         fileType: newMessage.fileType,
         replyTo: newMessage.replyTo || null,
         replyToMessage: newMessage.replyToMessage ? {
@@ -702,9 +842,12 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
       } : null
     };
 
+    // Set proper response headers for UTF-8
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
     res.status(201).json({
       success: true,
-      message: 'ส่งไฟล์สำเร็จ',
+      message: replyToId ? 'ส่งไฟล์ตอบกลับสำเร็จ' : 'ส่งไฟล์สำเร็จ',
       data: formattedMessage
     });
   } catch (error) {
@@ -735,29 +878,6 @@ router.get('/conversation/:participantId', async (req, res) => {
     .sort({ createdAt: -1 })
     .skip((page - 1) * limit)
     .limit(parseInt(limit));
-
-    // อัพเดทสถานะการอ่านสำหรับข้อความที่ยังไม่ได้อ่าน
-    const unreadMessages = messages.filter(msg => 
-      !msg.isRead && msg.sender !== employeeId
-    );
-
-    if (unreadMessages.length > 0) {
-      await DirectMessage.updateMany(
-        {
-          _id: { $in: unreadMessages.map(msg => msg._id) },
-          'readBy.user': { $ne: employeeId }
-        },
-        {
-          $set: { isRead: true },
-          $push: {
-            readBy: {
-              user: employeeId,
-              readAt: new Date()
-            }
-          }
-        }
-      );
-    }
 
     // ดึงข้อมูลผู้ส่งสำหรับแต่ละข้อความ
     const senderIds = [...new Set(messages.map(msg => msg.sender))];
@@ -846,13 +966,28 @@ router.get('/conversations', async (req, res) => {
               cond: { $ne: ['$$participant', employeeId] }
             }
           },
-          lastMessage: { $first: '$$ROOT' }
+          lastMessage: { $first: '$$ROOT' },
+          unreadCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ['$sender', employeeId] },
+                    { $eq: ['$isRead', false] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
         }
       },
       {
         $project: {
           participantId: { $arrayElemAt: ['$_id', 0] },
           lastMessage: 1,
+          unreadCount: 1,
           _id: 0
         }
       }
@@ -896,13 +1031,18 @@ router.get('/conversations', async (req, res) => {
             department: userMap[lastMessage.sender].department,
             imgUrl: userMap[lastMessage.sender].imgUrl || null
           } : null
-        }
+        },
+        unreadCount: conv.unreadCount || 0
       };
     });
 
+    // คำนวณจำนวนแชทที่ยังไม่ได้อ่านทั้งหมด
+    const totalUnreadCount = formattedConversations.reduce((total, conv) => total + (conv.unreadCount || 0), 0);
+
     res.json({
       success: true,
-      data: formattedConversations
+      data: formattedConversations,
+      totalUnreadCount: totalUnreadCount
     });
   } catch (error) {
     console.error('Error fetching conversations:', error);
@@ -1073,6 +1213,86 @@ router.delete('/:messageId', async (req, res) => {
   } catch (error) {
     console.error('Error deleting message:', error);
     res.status(500).json({ error: error.message || 'ไม่สามารถลบข้อความได้' });
+  }
+});
+
+// ดึงจำนวนข้อความที่ยังไม่ได้อ่านแยกตามคู่สนทนา
+router.get('/unread-counts', async (req, res) => {
+  try {
+    const { employeeId } = req.query;
+
+    if (!employeeId) {
+      return res.status(400).json({ error: 'กรุณาระบุผู้ใช้' });
+    }
+
+    // ค้นหาจำนวนข้อความที่ยังไม่ได้อ่านแยกตามคู่สนทนา
+    const unreadCounts = await DirectMessage.aggregate([
+      {
+        $match: {
+          participants: employeeId,
+          sender: { $ne: employeeId },
+          isRead: false
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $filter: {
+              input: '$participants',
+              as: 'participant',
+              cond: { $ne: ['$$participant', employeeId] }
+            }
+          },
+          unreadCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          participantId: { $arrayElemAt: ['$_id', 0] },
+          unreadCount: 1,
+          _id: 0
+        }
+      }
+    ]);
+
+    // ดึงข้อมูลผู้ใช้สำหรับแต่ละคู่สนทนา
+    const participantIds = unreadCounts.map(item => item.participantId);
+    const userPromises = participantIds.map(id => findUserByEmployeeId(id));
+    const userResults = await Promise.all(userPromises);
+    
+    const userMap = userResults.reduce((map, result) => {
+      if (result.success && result.user) {
+        map[result.user.employeeID] = result.user;
+      }
+      return map;
+    }, {});
+
+    // จัดรูปแบบข้อมูลพร้อมข้อมูลผู้ใช้
+    const formattedUnreadCounts = unreadCounts.map(item => {
+      const participant = userMap[item.participantId];
+      return {
+        participantId: item.participantId,
+        participant: participant ? {
+          employeeID: participant.employeeID,
+          fullName: participant.fullNameThai,
+          department: participant.department,
+          imgUrl: participant.imgUrl || null
+        } : null,
+        unreadCount: item.unreadCount
+      };
+    });
+
+    // คำนวณจำนวนข้อความที่ยังไม่ได้อ่านทั้งหมด
+    const totalUnreadCount = formattedUnreadCounts.reduce((total, item) => total + item.unreadCount, 0);
+
+    res.json({
+      success: true,
+      data: formattedUnreadCounts,
+      totalUnreadCount: totalUnreadCount
+    });
+  } catch (error) {
+    console.error('Error fetching unread counts:', error);
+    res.status(500).json({ error: error.message || 'ไม่สามารถดึงจำนวนข้อความที่ยังไม่ได้อ่านได้' });
   }
 });
 

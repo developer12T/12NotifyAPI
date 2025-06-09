@@ -1097,7 +1097,7 @@ router.delete('/:messageId', async (req, res) => {
 // ✅ Upload file to room (PDF, Excel, Word) - อัพเดทให้รองรับ reply
 router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
   try {
-    const { roomId, employeeId, message, replyToId } = req.body;
+    const { roomId, employeeId, message, replyToId, fileName } = req.body;
     const file = req.file;
 
     console.log('=== Upload File Debug ===');
@@ -1105,6 +1105,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
     console.log('Employee ID:', employeeId);
     console.log('Reply to ID:', replyToId || 'Not a reply');
     console.log('Optional message:', message);
+    console.log('Requested fileName:', fileName);
     console.log('File:', file ? {
       originalname: file.originalname,
       mimetype: file.mimetype,
@@ -1136,21 +1137,47 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
     const fileUrl = `/uploads/rooms/${roomId}/documents/${systemFilename}`;
     const fileType = path.extname(file.originalname).toLowerCase();
     
-    // Fix UTF-8 encoding for Thai filenames
-    let originalFilename = file.originalname;
+    // ใช้ชื่อไฟล์จาก request body หรือ fallback ไปที่ originalname
+    let originalFilename = fileName || file.originalname;
+    
+    // Fix UTF-8 encoding for Thai filenames - decode double-encoded Thai characters
     try {
-      // Try to decode if it's double-encoded
+      // ตรวจสอบว่าชื่อไฟล์มี Thai characters ที่ถูก encode ซ้ำหรือไม่
+      if (originalFilename.includes('%')) {
+        // ถ้ามี % แสดงว่าอาจเป็น URL encoded
+        originalFilename = decodeURIComponent(originalFilename);
+      }
+      
+      // ตรวจสอบการ encode ซ้ำแบบ latin1 -> utf8
       const buffer = Buffer.from(originalFilename, 'latin1');
       const decoded = buffer.toString('utf8');
-      // Check if decoded version looks like Thai characters
-      if (decoded.includes('à¸') || decoded.includes('à¹')) {
+      
+      // ตรวจสอบว่าผลลัพธ์ที่ decode แล้วมี Thai characters ที่ถูกต้องหรือไม่
+      // Thai characters มักจะมี pattern นี้เมื่อถูก encode ซ้ำ
+      if (decoded.includes('à¸') || decoded.includes('à¹') || 
+          decoded.includes('à¸') || decoded.includes('à¹') ||
+          /[\u0E00-\u0E7F]/.test(decoded)) {
         originalFilename = decoded;
       }
+      
+      // ตรวจสอบการ encode แบบ base64
+      if (originalFilename.match(/^[A-Za-z0-9+/=]+$/) && originalFilename.length > 20) {
+        try {
+          const base64Decoded = Buffer.from(originalFilename, 'base64').toString('utf8');
+          if (/[\u0E00-\u0E7F]/.test(base64Decoded)) {
+            originalFilename = base64Decoded;
+          }
+        } catch (e) {
+          // ไม่ใช่ base64 ที่ถูกต้อง
+        }
+      }
+      
     } catch (error) {
       console.log('Filename encoding detection failed, using original:', originalFilename);
     }
 
-    console.log('Original filename:', file.originalname);
+    console.log('Original filename from request:', fileName);
+    console.log('File originalname:', file.originalname);
     console.log('Processed filename:', originalFilename);
 
     let messageObj;

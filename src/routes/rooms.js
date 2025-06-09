@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const Room = require('../models/Room');
 const User = require('../models/User');
-const { getThaiTime, getThaiTimeISOString, formatThaiDateTime } = require('../utils/timeUtils');
+const { getThaiTime, formatThaiDateTime } = require('../utils/timeUtils');
 const Message = require('../models/Message');
 const Employee = require('../models/User');
 const { findUserByEmployeeId } = require('../services/ldapServices');
@@ -462,8 +462,8 @@ router.get('/employee/:empId', async (req, res) => {
           profileImage: lastMessageSender.profileImage || null,
           role: lastMessageSender.role
         } : null,
-        timestamp: lastMessage.createdAt,
-        isoString: getThaiTimeISOString(lastMessage.createdAt)
+        timestamp: getThaiTime(lastMessage.createdAt),
+        isoString: toThaiISOString(lastMessage.createdAt)
       } : null;
 
       return {
@@ -481,9 +481,13 @@ router.get('/employee/:empId', async (req, res) => {
       };
     });
 
+    // คำนวณจำนวนข้อความที่ยังไม่ได้อ่านทั้งหมด
+    const totalUnreadCount = formattedRooms.reduce((total, room) => total + (room.unreadCount || 0), 0);
+
     res.json({
       statusCode: 200,
-      data: formattedRooms
+      data: formattedRooms,
+      totalUnreadCount: totalUnreadCount
     });
   } catch (error) {
     console.error('Error getting employee rooms:', error);
@@ -1126,5 +1130,17 @@ router.delete('/:roomId', async (req, res) => {
     });
   }
 });
+
+// ฟังก์ชันแปลง Date/ISO string เป็น ISO string เวลาไทย
+function toThaiISOString(date) {
+  // ถ้าเป็น string และมี +07:00 หรือ +0700 หรือ - อื่นๆ ให้ return เลย
+  if (typeof date === 'string' && /([+-][0-9]{2}:?[0-9]{2})$/.test(date)) {
+    return date;
+  }
+  // ถ้าเป็น string ลงท้ายด้วย Z หรือ Date object ให้บวก 7 ชั่วโมง
+  const d = new Date(date);
+  d.setHours(d.getHours() + 7);
+  return d.toISOString().replace('Z', '+07:00');
+}
 
 module.exports = router; 
