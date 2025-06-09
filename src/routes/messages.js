@@ -3,7 +3,7 @@ const router = express.Router();
 const Message = require('../models/Message');
 const Room = require('../models/Room');
 const User = require('../models/User');
-const { getThaiTime, getThaiTimeISOString } = require('../utils/timeUtils');
+const { getThaiTime } = require('../utils/timeUtils');
 const { findUserByEmployeeId } = require('../services/ldapServices');
 const multer = require('multer');
 const path = require('path');
@@ -124,7 +124,7 @@ async function getSenderDetails(employeeId) {
     }
     return {
       employeeID: userDetails.user.employeeID,
-      fullName: userDetails.user.fullName,
+      fullName: userDetails.user.fullNameThai,
       department: userDetails.user.department,
       imgUrl: userDetails.user.imgUrl || null,
       role: 'user'
@@ -132,6 +132,17 @@ async function getSenderDetails(employeeId) {
   }
 }
 
+// ฟังก์ชันแปลง Date/ISO string เป็น ISO string เวลาไทย
+function toThaiISOString(date) {
+  // ถ้าเป็น string และมี +07:00 หรือ +0700 หรือ - อื่นๆ ให้ return เลย
+  if (typeof date === 'string' && /([+-][0-9]{2}:?[0-9]{2})$/.test(date)) {
+    return date;
+  }
+  // ถ้าเป็น string ลงท้ายด้วย Z หรือ Date object ให้บวก 7 ชั่วโมง
+  const d = new Date(date);
+  d.setHours(d.getHours() + 7);
+  return d.toISOString().replace('Z', '+07:00');
+}
 
 // ✅ Send message to room (text only) - อัพเดทให้รองรับ reply
 router.post('/send', async (req, res) => {
@@ -199,7 +210,8 @@ router.post('/send', async (req, res) => {
         sender: employeeId,
         message: messageText,
         replyToId,
-        isImage: false
+        isImage: false,
+        createdAt: new Date()
       });
 
       // Add sender details to the reply message
@@ -223,7 +235,7 @@ router.post('/send', async (req, res) => {
         sender: employeeId,
         message: messageText,
         isRead: false,
-        createdAt: getThaiTime(),
+        createdAt: new Date(),
         isImage: false,
         imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
         isAdminNotification: isAdminNotification || false
@@ -237,8 +249,8 @@ router.post('/send', async (req, res) => {
     const lastMessageData = {
       message: messageText,
       sender: employeeId,
-      timestamp: messageObj.createdAt,
-      isoString: getThaiTimeISOString(messageObj.createdAt),
+      timestamp: new Date(),
+      isoString: toThaiISOString(new Date()),
       isImage: false,
       imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
       isAdminNotification: isAdminNotification || false
@@ -263,7 +275,7 @@ router.post('/send', async (req, res) => {
       room: roomId,
       sender: sender,
       message: messageText,
-      timestamp: messageObj.createdAt,
+      timestamp: new Date(),
       isRead: false,
       isImage: false,
       imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
@@ -283,7 +295,9 @@ router.post('/send', async (req, res) => {
           department: replyToSenderDetails.department,
           profileImage: replyToSenderDetails.role === 'bot' ? replyToSenderDetails.imgUrl : replyToSenderDetails.profileImage,
           role: replyToSenderDetails.role
-        } : null
+        } : null,
+        createdAt: toThaiISOString(messageObj.replyToMessage.createdAt),
+        timestamp: toThaiISOString(messageObj.replyToMessage.createdAt)
       };
     }
 
@@ -302,7 +316,7 @@ router.post('/send', async (req, res) => {
         role: sender.role
       },
       isImage: false,
-      timestamp: messageObj.createdAt
+      timestamp: new Date()
     };
     io.emit('newMessageNotification', notificationData);
     console.log('Notification broadcasted for new message');
@@ -313,7 +327,7 @@ router.post('/send', async (req, res) => {
       room: messageObj.room,
       sender: sender,
       message: messageText,
-      timestamp: messageObj.createdAt,
+      timestamp: toThaiISOString(messageObj.createdAt),
       isRead: messageObj.isRead,
       isImage: false,
       imageUrl: sender.role === 'bot' ? sender.imgUrl : null,
@@ -332,7 +346,9 @@ router.post('/send', async (req, res) => {
           department: replyToSenderDetails.department,
           profileImage: replyToSenderDetails.role === 'bot' ? replyToSenderDetails.imgUrl : replyToSenderDetails.profileImage,
           role: replyToSenderDetails.role
-        } : null
+        } : null,
+        createdAt: toThaiISOString(messageObj.replyToMessage.createdAt),
+        timestamp: toThaiISOString(messageObj.replyToMessage.createdAt)
       };
     }
 
@@ -407,7 +423,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
         sender: employeeId,
         message: message || '',
         isRead: false,
-        createdAt: getThaiTime(),
+        createdAt: new Date(),
         isImage: true,
         imageUrl
       });
@@ -421,7 +437,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       message: message || '',
       sender: employeeId,
       timestamp: messageObj.createdAt,
-      isoString: getThaiTimeISOString(messageObj.createdAt),
+      isoString: toThaiISOString(messageObj.createdAt),
       isImage: true,
       imageUrl
     };
@@ -471,7 +487,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
         message: message || 'ส่งรูปภาพ',
         sender: {
           employeeID: sender.employeeID,
-          fullName: sender.fullName,
+          fullName: sender.fullNameThai,
           department: sender.department,
           role: sender.role
         },
@@ -489,7 +505,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       room: roomId,
       sender: sender,
       message: message || '',
-      timestamp: messageObj.createdAt,
+      timestamp: toThaiISOString(messageObj.createdAt),
       isRead: false,
       isImage: true,
       imageUrl
@@ -550,13 +566,13 @@ router.get('/room/:roomId', async (req, res) => {
       }
     }
 
-    // ✅ Format messages with reply data
+    // ✅ Format messages with reply data and convert timestamps
     const formattedMessages = messages.map(message => {
       const baseMessage = {
         _id: message._id,
         room: message.room,
         sender: message.sender ? senderMap[message.sender] : null,
-        timestamp: message.createdAt,
+        timestamp: toThaiISOString(message.createdAt),
         isRead: message.isRead,
         isImage: message.isImage,
         imageUrl: message.imageUrl,
@@ -575,7 +591,26 @@ router.get('/room/:roomId', async (req, res) => {
       if (message.replyTo && message.replyToMessage) {
         baseMessage.isReply = true;
         baseMessage.replyTo = message.replyTo;
-        baseMessage.replyToMessage = message.replyToMessage;
+        const replySender = senderMap[message.replyToMessage.sender] || null;
+        baseMessage.replyToMessage = {
+          messageId: message.replyToMessage._id,
+          sender: replySender ? {
+            employeeID: replySender.employeeID,
+            fullName: replySender.fullName,
+            department: replySender.department,
+            profileImage: replySender.role === 'bot' ? replySender.imgUrl : replySender.profileImage,
+            role: replySender.role
+          } : null,
+          message: message.replyToMessage.message || '',
+          isImage: message.replyToMessage.isImage,
+          imageUrl: message.replyToMessage.imageUrl,
+          isFile: message.replyToMessage.isFile,
+          fileUrl: message.replyToMessage.fileUrl,
+          fileName: message.replyToMessage.fileName,
+          fileType: message.replyToMessage.fileType,
+          createdAt: toThaiISOString(message.replyToMessage.createdAt),
+          timestamp: toThaiISOString(message.replyToMessage.createdAt)
+        };
       }
 
       return baseMessage;
@@ -729,7 +764,7 @@ router.post('/mark-read', async (req, res) => {
         $addToSet: {
           readBy: {
             user: employeeId,
-            readAt: getThaiTime()
+            readAt: new Date()
           }
         },
         $set: { isRead: true }
@@ -833,7 +868,7 @@ router.get('/user/:employeeId', async (req, res) => {
         _id: message._id,
         room: message.room,
         sender: message.sender ? senderMap[message.sender] : null,
-        timestamp: message.createdAt,
+        timestamp: toThaiISOString(message.createdAt),
         isRead: message.isRead,
         isImage: message.isImage,
         imageUrl: message.imageUrl,
@@ -852,7 +887,26 @@ router.get('/user/:employeeId', async (req, res) => {
       if (message.replyTo && message.replyToMessage) {
         baseMessage.isReply = true;
         baseMessage.replyTo = message.replyTo;
-        baseMessage.replyToMessage = message.replyToMessage;
+        const replySender = senderMap[message.replyToMessage.sender] || null;
+        baseMessage.replyToMessage = {
+          messageId: message.replyToMessage._id,
+          sender: replySender ? {
+            employeeID: replySender.employeeID,
+            fullName: replySender.fullName,
+            department: replySender.department,
+            profileImage: replySender.role === 'bot' ? replySender.imgUrl : replySender.profileImage,
+            role: replySender.role
+          } : null,
+          message: message.replyToMessage.message || '',
+          isImage: message.replyToMessage.isImage,
+          imageUrl: message.replyToMessage.imageUrl,
+          isFile: message.replyToMessage.isFile,
+          fileUrl: message.replyToMessage.fileUrl,
+          fileName: message.replyToMessage.fileName,
+          fileType: message.replyToMessage.fileType,
+          createdAt: toThaiISOString(message.replyToMessage.createdAt),
+          timestamp: toThaiISOString(message.replyToMessage.createdAt)
+        };
       }
 
       return baseMessage;
@@ -943,7 +997,7 @@ router.delete('/:messageId', async (req, res) => {
         message: lastMessage.message,
         sender: lastMessage.sender, // ใช้แค่ employeeID
         timestamp: lastMessage.createdAt,
-        isoString: getThaiTimeISOString(lastMessage.createdAt),
+        isoString: toThaiISOString(lastMessage.createdAt),
         isImage: lastMessage.isImage,
         imageUrl: lastMessage.imageUrl,
         isAdminNotification: lastMessage.isAdminNotification
@@ -988,14 +1042,14 @@ router.delete('/:messageId', async (req, res) => {
           message: lastMessage.message,
           sender: {
             employeeID: senderDetails.employeeID,
-            fullName: senderDetails.fullName,
+            fullName: senderDetails.fullNameThai,
             department: senderDetails.department,
             profileImage: senderDetails.role === 'bot' ? senderDetails.imgUrl : 
               `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${senderDetails.employeeID}.jpg`,
             role: senderDetails.role
           },
           timestamp: lastMessage.createdAt,
-          isoString: getThaiTimeISOString(lastMessage.createdAt),
+          isoString: toThaiISOString(lastMessage.createdAt),
           isImage: lastMessage.isImage,
           imageUrl: lastMessage.imageUrl,
           isAdminNotification: lastMessage.isAdminNotification
@@ -1054,7 +1108,8 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
     console.log('File:', file ? {
       originalname: file.originalname,
       mimetype: file.mimetype,
-      size: file.size
+      size: file.size,
+      encoding: file.encoding
     } : 'No file');
 
     if (!file) {
@@ -1080,6 +1135,24 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
     const systemFilename = path.basename(file.path);
     const fileUrl = `/uploads/rooms/${roomId}/documents/${systemFilename}`;
     const fileType = path.extname(file.originalname).toLowerCase();
+    
+    // Fix UTF-8 encoding for Thai filenames
+    let originalFilename = file.originalname;
+    try {
+      // Try to decode if it's double-encoded
+      const buffer = Buffer.from(originalFilename, 'latin1');
+      const decoded = buffer.toString('utf8');
+      // Check if decoded version looks like Thai characters
+      if (decoded.includes('à¸') || decoded.includes('à¹')) {
+        originalFilename = decoded;
+      }
+    } catch (error) {
+      console.log('Filename encoding detection failed, using original:', originalFilename);
+    }
+
+    console.log('Original filename:', file.originalname);
+    console.log('Processed filename:', originalFilename);
+
     let messageObj;
 
     // ✅ Check if this is a reply message
@@ -1092,9 +1165,10 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         replyToId,
         isFile: true,
         fileUrl,
-        fileName: file.originalFilename,
+        fileName: originalFilename, // Use processed filename
         fileType,
-        systemFilename
+        systemFilename,
+        createdAt: new Date()
       });
     } else {
       console.log('Creating regular file message');
@@ -1104,10 +1178,10 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         sender: employeeId,
         message: message || '',
         isRead: false,
-        createdAt: getThaiTime(),
+        createdAt: new Date(),
         isFile: true,
         fileUrl,
-        fileName: file.originalFilename,
+        fileName: originalFilename, // Use processed filename
         fileType,
         systemFilename
       });
@@ -1118,13 +1192,13 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
 
     // Update room's lastMessage
     const lastMessageData = {
-      message: message || file.originalname,
+      message: message || originalFilename, // Use processed filename
       sender: employeeId,
       timestamp: messageObj.createdAt,
-      isoString: getThaiTimeISOString(messageObj.createdAt),
+      isoString: toThaiISOString(messageObj.createdAt),
       isFile: true,
       fileUrl,
-      fileName: file.originalFilename,
+      fileName: originalFilename, // Use processed filename
       fileType
     };
 
@@ -1153,7 +1227,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         isRead: false,
         isFile: true,
         fileUrl,
-        fileName: file.originalFilename,
+        fileName: originalFilename, // Use processed filename
         fileType,
         success: true
       };
@@ -1165,6 +1239,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         socketData.replyToMessage = messageObj.replyToMessage;
       }
 
+      console.log('Emitting socket data:', JSON.stringify(socketData, null, 2));
       io.to(roomId).emit('newMessage', socketData);
       console.log('File message broadcasted successfully');
 
@@ -1172,16 +1247,16 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       const notificationData = {
         roomId: roomId,
         roomName: room.name,
-        message: message || `ส่งไฟล์ ${file.originalFilename}`,
+        message: message || `ส่งไฟล์ ${originalFilename}`, // Use processed filename
         sender: {
           employeeID: sender.employeeID,
-          fullName: sender.fullName,
+          fullName: sender.fullNameThai,
           department: sender.department,
           role: sender.role
         },
         isFile: true,
         fileUrl: fileUrl,
-        fileName: file.originalFilename,
+        fileName: originalFilename, // Use processed filename
         fileType: fileType,
         timestamp: messageObj.createdAt
       };
@@ -1195,11 +1270,11 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       room: roomId,
       sender: sender,
       message: message || '',
-      timestamp: messageObj.createdAt,
+      timestamp: toThaiISOString(messageObj.createdAt),
       isRead: false,
       isFile: true,
       fileUrl,
-      fileName: file.originalFilename,
+      fileName: originalFilename, // Use processed filename
       fileType
     };
 
@@ -1210,6 +1285,9 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       responseData.replyToMessage = messageObj.replyToMessage;
     }
 
+    // Set proper response headers for UTF-8
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    
     res.json({
       statusCode: 200,
       message: replyToId ? 'ส่งไฟล์ตอบกลับสำเร็จ' : 'อัพโหลดไฟล์สำเร็จ',

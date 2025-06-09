@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getThaiTime, getThaiTimeISOString } = require('../utils/timeUtils');
 
 const roomSchema = new mongoose.Schema({
   name: {
@@ -30,8 +31,16 @@ const roomSchema = new mongoose.Schema({
   lastMessage: {
     message: String,
     sender: String,
-    timestamp: Date,
-    isoString: String
+    timestamp: {
+      type: Date,
+      default: Date.now
+    },
+    isoString: {
+      type: String,
+      default: function() {
+        return getThaiTimeISOString(this.timestamp);
+      }
+    }
   },
   unreadCounts: [{
     user: String,

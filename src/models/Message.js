@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getThaiTime } = require('../utils/timeUtils');
 
 const messageSchema = new mongoose.Schema({
   room: {
@@ -94,7 +95,10 @@ const messageSchema = new mongoose.Schema({
     fileUrl: String, // URL ไฟล์ (สำหรับ file message)
     fileName: String, // ชื่อไฟล์ต้นฉบับ
     fileType: String, // ประเภทไฟล์
-    createdAt: Date // วันที่ส่งข้อความต้นฉบับ
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
   },
   isAdminNotification: {
     type: Boolean,
@@ -176,6 +180,7 @@ messageSchema.statics.createReply = async function(replyData) {
     fileName,
     fileType,
     replyTo: replyToId,
+    createdAt: Date.now(),
     replyToMessage: {
       messageId: originalMessage._id,
       sender: originalMessage.sender,

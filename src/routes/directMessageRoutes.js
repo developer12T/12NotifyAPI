@@ -507,13 +507,6 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
     const { recipientId, message, employeeId, replyToId } = req.body;
     const file = req.file;
 
-    // ตรวจสอบว่ามีการส่ง request มาที่ endpoint ถูกต้อง
-    if (!req.originalUrl.startsWith('/direct-messages/upload-file')) {
-      return res.status(400).json({ 
-        error: 'Invalid endpoint. Please use /direct-message/upload-file for direct message file uploads.' 
-      });
-    }
-
     if (!recipientId || !employeeId) {
       return res.status(400).json({ 
         error: 'กรุณาระบุผู้รับและผู้ส่งข้อความ',
