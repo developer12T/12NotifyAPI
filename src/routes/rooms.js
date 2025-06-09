@@ -45,9 +45,9 @@ router.post('/', upload.single('image'), async (req, res) => {
     // Get image URL if file was uploaded
     const imageUrl = req.file ? `/uploads/rooms/${req.file.filename}` : null;
 
-    // Initialize unreadCounts for all members including admin
+    // Add admin to members list with admin role
     const allMembers = [
-      { empId: admin.empId, role: admin.role },
+      { empId: admin.empId, role: 'admin' },
       ...(members || [])
     ];
 
@@ -60,8 +60,7 @@ router.post('/', upload.single('image'), async (req, res) => {
       name,
       description,
       color: color || '#007bff',
-      admin,
-      members,
+      members: allMembers,
       lastMessage: null,
       unreadCounts,
       imageUrl
@@ -302,7 +301,8 @@ router.delete('/:roomId/members/:userId', async (req, res) => {
     }
 
     // Check if user is admin
-    if (room.admin.empId === userId) {
+    const member = room.members.find(m => m.empId === userId);
+    if (member && member.role === 'admin') {
       return res.status(400).json({
         statusCode: 400,
         message: 'ไม่สามารถลบ admin ออกจากห้องได้'
@@ -310,8 +310,7 @@ router.delete('/:roomId/members/:userId', async (req, res) => {
     }
 
     // Check if user is a member
-    const isMember = room.members.some(member => member.empId === userId);
-    if (!isMember) {
+    if (!member) {
       return res.status(404).json({
         statusCode: 404,
         message: 'ไม่พบสมาชิกในห้องนี้'
@@ -372,12 +371,9 @@ router.get('/employee/:empId', async (req, res) => {
   try {
     const { empId } = req.params;
 
-    // Get rooms where empId is a member or admin
+    // Get rooms where empId is a member
     const rooms = await Room.find({
-      $or: [
-        { 'members.empId': empId },
-        { 'admin.empId': empId }
-      ]
+      'members.empId': empId
     });
 
     // Get last message for each room
@@ -445,6 +441,9 @@ router.get('/employee/:empId', async (req, res) => {
         member => member.empId === empId
       )?.role || null;
 
+      // Get admin of the room
+      const admin = room.members.find(member => member.role === 'admin');
+
       // Get sender details for lastMessage
       const lastMessageSender = lastMessage?.sender ? 
         (userMap[lastMessage.sender] || botMap[lastMessage.sender]) : null;
@@ -471,10 +470,10 @@ router.get('/employee/:empId', async (req, res) => {
         id: room._id,
         name: room.name,
         description: room.description,
-        imageUrl:  room.imageUrl,
+        imageUrl: room.imageUrl,
         color: room.color,
-        admin: room.admin ? room.admin.empId : null,
-        adminRole: room.admin ? room.admin.role : null,
+        admin: admin ? admin.empId : null,
+        adminRole: admin ? admin.role : null,
         userRole,
         lastMessage: formattedLastMessage,
         unreadCount,
@@ -505,19 +504,25 @@ router.get('/web', async (req, res) => {
       'description': 1,
       'color': 1,
       'members': 1,
-      'admin': 1,
       'isActive': 1,
       'createdAt': 1,
       'updatedAt': 1
     });
 
-    // Get admin details from LDAP
-    const adminPromises = rooms.map(room => findUserByEmployeeId(room.admin.empId));
+    // Get admin details from LDAP for each room
+    const adminPromises = rooms.map(room => {
+      const admin = room.members.find(m => m.role === 'admin');
+      return admin ? findUserByEmployeeId(admin.empId) : Promise.resolve({ success: false });
+    });
     const adminResults = await Promise.all(adminPromises);
     
-    const adminMap = adminResults.reduce((map, result) => {
+    const adminMap = adminResults.reduce((map, result, index) => {
       if (result.success && result.user) {
-        map[result.user.employeeID] = result.user;
+        const room = rooms[index];
+        const admin = room.members.find(m => m.role === 'admin');
+        if (admin) {
+          map[admin.empId] = result.user;
+        }
       }
       return map;
     }, {});
@@ -560,7 +565,8 @@ router.get('/web', async (req, res) => {
 
     // Format rooms with admin and filtered members details
     const formattedRooms = rooms.map(room => {
-      const admin = adminMap[room.admin.empId];
+      const admin = room.members.find(m => m.role === 'admin');
+      const adminDetails = admin ? adminMap[admin.empId] : null;
       
       // Format all members (both users and bots)
       const formattedMembers = room.members.map(member => {
@@ -584,19 +590,19 @@ router.get('/web', async (req, res) => {
         return null;
       }).filter(Boolean); // Remove null entries
 
-      // Calculate total members (admin + all members)
-      const totalMembers = room.members.length + 1; // +1 for admin
+      // Calculate total members
+      const totalMembers = room.members.length;
 
       return {
         ...room.toObject(),
-        admin: admin ? {
-          employeeID: admin.employeeID,
-          fullName: admin.fullName,
-          department: admin.department,
-          role: room.admin.role
-        } : room.admin,
+        admin: adminDetails ? {
+          employeeID: adminDetails.employeeID,
+          fullName: adminDetails.fullName,
+          department: adminDetails.department,
+          role: admin.role
+        } : null,
         members: formattedMembers,
-        totalMembers: totalMembers,
+        totalMembers,
         createdAt: formatThaiDateTime(room.createdAt),
         updatedAt: formatThaiDateTime(room.updatedAt)
       };
@@ -629,11 +635,8 @@ router.get('/:roomId/members', async (req, res) => {
       });
     }
 
-    // Get all member IDs (including admin) using Set to prevent duplicates
-    const memberIds = [...new Set([
-      ...room.members.map(m => m.empId),
-      room.admin.empId
-    ])];
+    // Get all member IDs
+    const memberIds = room.members.map(m => m.empId);
 
     // Get user details for all members using LDAP
     const userPromises = memberIds.map(id => findUserByEmployeeId(id));
@@ -662,19 +665,18 @@ router.get('/:roomId/members', async (req, res) => {
     }, {});
 
     // Format members with their roles and details
-    const formattedMembers = memberIds.map(empId => {
-      const user = userMap[empId];
-      const isAdmin = room.admin.empId === empId;
-      const memberRole = room.members.find(m => m.empId === empId)?.role;
-      const isBot = memberRole === 'bot';
-      const botDetails = isBot ? botMap[empId] : null;
+    const formattedMembers = room.members.map(member => {
+      const user = userMap[member.empId];
+      const isBot = member.role === 'bot';
+      const botDetails = isBot ? botMap[member.empId] : null;
+      const isAdmin = member.role === 'admin';
 
       return {
-        employeeID: empId,
+        employeeID: member.empId,
         fullName: isBot ? (botDetails?.name || 'Unknown Bot') : (user?.fullName || 'Unknown User'),
         department: isBot ? 'bot notify' : (user?.department || 'Unknown Department'),
         profileImage: user?.profileImage || null,
-        role: isAdmin ? room.admin.role : memberRole,
+        role: member.role,
         isAdmin: isAdmin
       };
     });
@@ -784,11 +786,8 @@ router.get('/:roomId', async (req, res) => {
       });
     }
 
-    // Get all member IDs (including admin) using Set to prevent duplicates
-    const memberIds = [...new Set([
-      ...room.members.map(m => m.empId),
-      room.admin.empId
-    ])];
+    // Get all member IDs
+    const memberIds = room.members.map(m => m.empId);
 
     // Get user details for all members using LDAP
     const userPromises = memberIds.map(id => findUserByEmployeeId(id));
@@ -817,26 +816,21 @@ router.get('/:roomId', async (req, res) => {
     }, {});
 
     // Format members with their roles and details
-    const formattedMembers = memberIds.map(empId => {
-      const user = userMap[empId];
-      const isAdmin = room.admin.empId === empId;
-      const memberRole = room.members.find(m => m.empId === empId)?.role;
-      const isBot = memberRole === 'bot';
-      const botDetails = isBot ? botMap[empId] : null;
+    const formattedMembers = room.members.map(member => {
+      const user = userMap[member.empId];
+      const isBot = member.role === 'bot';
+      const botDetails = isBot ? botMap[member.empId] : null;
+      const isAdmin = member.role === 'admin';
 
       return {
-        employeeID: empId,
+        employeeID: member.empId,
         fullName: isBot ? (botDetails?.name || 'Unknown Bot') : (user?.fullName || 'Unknown User'),
         department: isBot ? 'bot notify' : (user?.department || 'Unknown Department'),
-        profileImage: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${empId}.jpg` || null,
-        role: isAdmin ? room.admin.role : memberRole,
+        profileImage: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${member.empId}.jpg` || null,
+        role: member.role,
         isAdmin: isAdmin
       };
     });
-
-    // Get admin details using LDAP
-    const adminResult = await findUserByEmployeeId(room.admin.empId);
-    const adminDetails = adminResult.success ? adminResult.user : null;
 
     // Format response
     const formattedRoom = {
@@ -845,13 +839,6 @@ router.get('/:roomId', async (req, res) => {
       description: room.description,
       color: room.color,
       imageUrl: room.imageUrl,
-      admin: adminDetails ? {
-        employeeID: adminDetails.employeeID,
-        fullName: adminDetails.fullName,
-        department: adminDetails.department,
-        profileImage: adminDetails.profileImage,
-        role: room.admin.role
-      } : null,
       members: formattedMembers,
       createdAt: room.createdAt,
       updatedAt: room.updatedAt,
@@ -872,7 +859,7 @@ router.get('/:roomId', async (req, res) => {
   }
 });
 
-// Update room details - Fixed version
+// Update room details
 router.put('/:roomId', upload.single('image'), async (req, res) => {
   console.log('=== Room Update Request ===');
   console.log('Room ID:', req.params.roomId);
@@ -881,7 +868,20 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
 
   try {
     const { roomId } = req.params;
-    const { name, description, color, imageUrl, admin, members } = req.body;
+    let { name, description, color, imageUrl, members } = req.body;
+
+    // Parse members if it's a JSON string
+    if (typeof members === 'string') {
+      try {
+        members = JSON.parse(members);
+      } catch (e) {
+        console.error('Error parsing members JSON:', e);
+        return res.status(400).json({
+          statusCode: 400,
+          message: 'รูปแบบข้อมูลสมาชิกไม่ถูกต้อง'
+        });
+      }
+    }
 
     // Validate required fields
     if (!name) {
@@ -901,10 +901,20 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       });
     }
 
+    // Find current admin
+    const currentAdmin = room.members.find(m => m.role === 'admin');
+    if (!currentAdmin) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'ไม่พบผู้ดูแลห้องแชท'
+      });
+    }
+
     console.log('[Room Update] Current room data:', {
       name: room.name,
-      admin: room.admin,
-      memberCount: room.members.length
+      admin: currentAdmin,
+      memberCount: room.members.length,
+      currentMembers: room.members
     });
 
     // Prepare update data
@@ -930,94 +940,53 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       updateData.imageUrl = imageUrl;
     }
 
-    // Handle admin change and members update together
-    let finalMembers = [...room.members]; // Copy current members
-    let finalAdmin = room.admin; // Keep current admin by default
-
-    // Case 1: Admin change requested (only if it's different from current admin)
-    if (admin && admin.empId && admin.empId !== room.admin.empId) {
-      console.log('[Room Update] Admin change requested:', {
-        currentAdmin: room.admin.empId,
-        newAdmin: admin.empId
-      });
-
-      // Step 1: Check if new admin is currently a member and remove them
-      const newAdminMemberIndex = finalMembers.findIndex(member => member.empId === admin.empId);
-      
-      if (newAdminMemberIndex !== -1) {
-        // Remove new admin from members list (they'll become admin)
-        finalMembers.splice(newAdminMemberIndex, 1);
-        console.log('[Room Update] Removed new admin from members list');
-      }
-
-      // Step 2: IMPORTANT - Move current admin to members list with 'User' role
-      // This is the key part: current admin becomes a regular user
-      finalMembers.push({
-        empId: room.admin.empId,  // Current admin's empId
-        role: 'User'              // Demote to User role
-      });
-
-      // Step 3: Set new admin
-      finalAdmin = {
-        empId: admin.empId,       // New admin's empId
-        role: 'admin'             // Promote to admin role
-      };
-
-      console.log('[Room Update] Admin swap completed:', {
-        newAdmin: finalAdmin.empId,
-        formerAdminNowMember: room.admin.empId,
-        formerAdminNewRole: 'User'
-      });
-    }
-
-    // Case 2: Members update requested  
+    // Handle members update
     if (members && Array.isArray(members)) {
-      console.log('[Room Update] Members update requested');
+      console.log('[Room Update] Members update requested:', members);
       
-      // If no admin change was requested OR admin is the same person, 
-      // make sure current admin is not in members list
-      if (!admin || !admin.empId || admin.empId === room.admin.empId) {
-        // Keep current admin, just update members (excluding current admin)
-        finalMembers = members
-          .filter(member => member.empId !== finalAdmin.empId)
-          .map(member => ({
-            empId: member.empId,
-            role: member.role || 'User'
-          }));
-      } else {
-        // Admin was changed to a different person, handle members list accordingly
-        finalMembers = members
-          .filter(member => member.empId !== finalAdmin.empId) // Remove new admin from members
-          .map(member => ({
-            empId: member.empId,
-            role: member.role || 'User'
-          }));
-        
-        // Add former admin to members if not already included
-        const formerAdminInNewMembers = members.some(member => member.empId === room.admin.empId);
-        if (!formerAdminInNewMembers) {
-          finalMembers.push({
-            empId: room.admin.empId,
-            role: 'User'
-          });
+      // Ensure current admin is in the members list with admin role
+      const updatedMembers = members.map(member => {
+        // Keep only necessary fields
+        const { empId, role } = member;
+        if (empId === currentAdmin.empId) {
+          return { empId, role: 'admin' };
         }
+        return { empId, role: role || 'User' };
+      });
+
+      // If current admin is not in the new members list, add them back
+      if (!updatedMembers.some(m => m.empId === currentAdmin.empId)) {
+        updatedMembers.push({
+          empId: currentAdmin.empId,
+          role: 'admin'
+        });
       }
+
+      // Remove duplicates and validate each member
+      const uniqueMembers = updatedMembers.filter((member, index, self) => {
+        // Check if member has required fields
+        if (!member.empId || !member.role) {
+          console.log('[Validation] Invalid member data:', member);
+          return false;
+        }
+        // Keep only first occurrence of each empId
+        return index === self.findIndex(m => m.empId === member.empId);
+      });
+
+      console.log('[Room Update] Processed members:', uniqueMembers);
+      updateData.members = uniqueMembers;
+
+      // Update unreadCounts for all members
+      updateData.unreadCounts = uniqueMembers.map(member => ({
+        user: member.empId,
+        count: room.unreadCounts.find(uc => uc.user === member.empId)?.count || 0
+      }));
     }
-
-    // Remove duplicates from members array (just in case)
-    const uniqueMembers = finalMembers.filter((member, index, self) => 
-      index === self.findIndex(m => m.empId === member.empId)
-    );
-
-    // Update the room data
-    updateData.admin = finalAdmin;
-    updateData.members = uniqueMembers;
 
     console.log('[Room Update] Final update data:', {
-      adminChanged: admin && admin.empId && admin.empId !== room.admin.empId,
-      admin: updateData.admin.empId,
-      memberCount: updateData.members.length,
-      members: updateData.members.map(m => ({ empId: m.empId, role: m.role }))
+      admin: currentAdmin.empId,
+      memberCount: updateData.members?.length || room.members.length,
+      members: updateData.members?.map(m => ({ empId: m.empId, role: m.role })) || room.members.map(m => ({ empId: m.empId, role: m.role }))
     });
 
     // Update room details
@@ -1026,17 +995,6 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       { $set: updateData },
       { new: true }
     );
-
-    console.log('[Room Update] Room updated successfully:', {
-      id: updatedRoom._id,
-      name: updatedRoom.name,
-      admin: updatedRoom.admin,
-      memberCount: updatedRoom.members.length
-    });
-
-    // Get admin details using LDAP
-    const adminResult = await findUserByEmployeeId(updatedRoom.admin.empId);
-    const adminDetails = adminResult.success ? adminResult.user : null;
 
     // Get member details using LDAP
     const memberPromises = updatedRoom.members.map(member => 
@@ -1051,7 +1009,8 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
           fullName: result.user.fullName,
           department: result.user.department,
           profileImage: result.user.profileImage,
-          role: updatedRoom.members[index].role
+          role: updatedRoom.members[index].role,
+          isAdmin: updatedRoom.members[index].role === 'admin'
         };
       }
       return null;
@@ -1064,13 +1023,6 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       description: updatedRoom.description,
       color: updatedRoom.color,
       imageUrl: updatedRoom.imageUrl,
-      admin: adminDetails ? {
-        employeeID: adminDetails.employeeID,
-        fullName: adminDetails.fullName,
-        department: adminDetails.department,
-        profileImage: adminDetails.profileImage,
-        role: updatedRoom.admin.role
-      } : null,
       members: formattedMembers,
       createdAt: updatedRoom.createdAt,
       updatedAt: updatedRoom.updatedAt,
@@ -1116,7 +1068,7 @@ router.put('/:roomId', upload.single('image'), async (req, res) => {
       error: error.message
     });
   }
-}); 
+});
 
 // Delete room
 router.delete('/:roomId', async (req, res) => {
@@ -1174,6 +1126,5 @@ router.delete('/:roomId', async (req, res) => {
     });
   }
 });
-
 
 module.exports = router; 

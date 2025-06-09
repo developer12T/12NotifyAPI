@@ -17,13 +17,16 @@ const roomSchema = new mongoose.Schema({
     trim: true
   },
   members: [{
-    empId: String,
-    role: String
+    empId: {
+      type: String,
+      required: true
+    },
+    role: {
+      type: String,
+      enum: ['admin', 'User', 'bot', 'owner'],
+      default: 'User'
+    }
   }],
-  admin: {
-    empId: String,
-    role: String
-  },
   lastMessage: {
     message: String,
     sender: String,
@@ -55,9 +58,8 @@ const roomSchema = new mongoose.Schema({
 // Indexes for better query performance
 roomSchema.index({ name: 1 });
 roomSchema.index({ color: 1 });
-roomSchema.index({ admin: 1 });
 roomSchema.index({ 'members.empId': 1 });
-roomSchema.index({ 'admin.empId': 1 });
+roomSchema.index({ 'members.role': 1 });
 roomSchema.index({ 'lastMessage.timestamp': -1 });
 
 // Update timestamp before saving

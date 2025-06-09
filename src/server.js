@@ -37,6 +37,7 @@ app.use(express.static('public'));
 app.use('/uploads/announcements', express.static(path.join(__dirname, '../uploads/announcements')));
 // Serve static files for chat room images
 app.use('/uploads/rooms', express.static(path.join(__dirname, '../uploads/rooms')));
+app.use('/uploads/directMessage', express.static(path.join(__dirname, '../uploads/directMessage')));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/notification-system', {

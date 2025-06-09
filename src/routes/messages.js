@@ -45,12 +45,13 @@ const documentStorage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
-    // Generate unique filename with timestamp and original name
+    // Generate unique filename with timestamp
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const ext = path.extname(file.originalname);
-    const originalName = path.basename(file.originalname, ext);
-    // Keep original filename but add timestamp to prevent duplicates
-    cb(null, `${originalName}-${uniqueSuffix}${ext}`);
+    // Store original filename in metadata
+    file.originalFilename = file.originalname;
+    // Use system filename for storage
+    cb(null, `file-${uniqueSuffix}${ext}`);
   }
 });
 
@@ -560,7 +561,14 @@ router.get('/room/:roomId', async (req, res) => {
         isImage: message.isImage,
         imageUrl: message.imageUrl,
         isAdminNotification: message.isAdminNotification,
-        ...(message.message ? { message: message.message } : {})
+        ...(message.message ? { message: message.message } : {}),
+        // Add file information if message is a file
+        ...(message.isFile ? {
+          isFile: true,
+          fileUrl: message.fileUrl,
+          fileName: message.fileName,
+          fileType: message.fileType
+        } : {})
       };
 
       // ✅ Add reply data if message is a reply
@@ -830,7 +838,14 @@ router.get('/user/:employeeId', async (req, res) => {
         isImage: message.isImage,
         imageUrl: message.imageUrl,
         isAdminNotification: message.isAdminNotification,
-        ...(message.message ? { message: message.message } : {})
+        ...(message.message ? { message: message.message } : {}),
+        // Add file information if message is a file
+        ...(message.isFile ? {
+          isFile: true,
+          fileUrl: message.fileUrl,
+          fileName: message.fileName,
+          fileType: message.fileType
+        } : {})
       };
 
       // Add reply data if message is a reply
@@ -1062,7 +1077,8 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       });
     }
 
-    const fileUrl = `/uploads/rooms/${roomId}/documents/${path.basename(file.path)}`;
+    const systemFilename = path.basename(file.path);
+    const fileUrl = `/uploads/rooms/${roomId}/documents/${systemFilename}`;
     const fileType = path.extname(file.originalname).toLowerCase();
     let messageObj;
 
@@ -1076,8 +1092,9 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         replyToId,
         isFile: true,
         fileUrl,
-        fileName: file.originalname,
-        fileType
+        fileName: file.originalFilename,
+        fileType,
+        systemFilename
       });
     } else {
       console.log('Creating regular file message');
@@ -1090,8 +1107,9 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         createdAt: getThaiTime(),
         isFile: true,
         fileUrl,
-        fileName: file.originalname,
-        fileType
+        fileName: file.originalFilename,
+        fileType,
+        systemFilename
       });
       await messageObj.save();
     }
@@ -1106,7 +1124,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       isoString: getThaiTimeISOString(messageObj.createdAt),
       isFile: true,
       fileUrl,
-      fileName: file.originalname,
+      fileName: file.originalFilename,
       fileType
     };
 
@@ -1135,7 +1153,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         isRead: false,
         isFile: true,
         fileUrl,
-        fileName: file.originalname,
+        fileName: file.originalFilename,
         fileType,
         success: true
       };
@@ -1154,7 +1172,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       const notificationData = {
         roomId: roomId,
         roomName: room.name,
-        message: message || `ส่งไฟล์ ${file.originalname}`,
+        message: message || `ส่งไฟล์ ${file.originalFilename}`,
         sender: {
           employeeID: sender.employeeID,
           fullName: sender.fullName,
@@ -1163,7 +1181,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
         },
         isFile: true,
         fileUrl: fileUrl,
-        fileName: file.originalname,
+        fileName: file.originalFilename,
         fileType: fileType,
         timestamp: messageObj.createdAt
       };
@@ -1181,7 +1199,7 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       isRead: false,
       isFile: true,
       fileUrl,
-      fileName: file.originalname,
+      fileName: file.originalFilename,
       fileType
     };
 

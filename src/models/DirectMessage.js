@@ -99,7 +99,10 @@ const directMessageSchema = new mongoose.Schema({
     fileUrl: String,
     fileName: String,
     fileType: String,
-    createdAt: Date
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
   }
 });
 
