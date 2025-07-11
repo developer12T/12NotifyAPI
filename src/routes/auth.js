@@ -17,12 +17,29 @@ router.post('/login', async (req, res) => {
     const result = await authenticateLDAP(username, password);
 
     if (result.success) {
+      // ใช้ entries[0] เพราะ LDAP ส่งกลับเป็น array
+      const userData = result.entries[0];
+      
+      // เช็คว่ามี user ใน database หรือไม่
+      let user = await User.findOne({ employeeID: userData.employeeID });
+      
+      if (!user) {
+        // สร้าง user ใหม่ใน database
+        user = new User({
+          employeeID: userData.employeeID,
+          role: 'user', // default role
+          createdAt: new Date()
+        });
+        await user.save();
+        console.log(`[Auth] Created new user: ${userData.employeeID}`);
+      }
+      
       // สร้าง token
       const token = jwt.sign(
         { 
-          employeeID: result.entries.employeeID,
-          username: result.entries.username,
-          department: result.entries.department
+          employeeID: userData.employeeID,
+          username: userData.userName,
+          department: userData.department
         },
         process.env.JWT_SECRET || 'your-secret-key',
         { expiresIn: '24h' }
@@ -30,7 +47,11 @@ router.post('/login', async (req, res) => {
       
       return res.status(200).json({ 
         statusCode: 200, 
-        data: result.entries,
+        data: {
+          ...userData,
+          hasFcmToken: !!user.fcmToken, // บอกว่า user มี FCM token หรือไม่
+          lastTokenUpdate: user.lastTokenUpdate
+        },
         token: token
       });
     } else {

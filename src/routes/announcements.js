@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 const Announcement = require('../models/Announcement');
 const User = require('../models/User');
 const { getThaiTime, getThaiTimeISOString } = require('../utils/timeUtils');
@@ -74,6 +75,69 @@ router.post('/send', upload.single('image'), async (req, res) => {
       } catch (error) {
         console.error('Error emitting announcement:', error);
       }
+    }
+
+    // ส่ง FCM notification ไปยังผู้ใช้ทั้งหมด
+    try {
+      // ดึง FCM tokens จาก database
+      const usersWithTokens = await User.find({ 
+        fcmToken: { $exists: true, $ne: null } 
+      }).select('fcmToken');
+      
+      if (usersWithTokens.length > 0) {
+        const tokens = usersWithTokens.map(user => user.fcmToken);
+        
+        // ส่งไปยังแต่ละ token แยกกัน
+        let successCount = 0;
+        let failureCount = 0;
+        const failedTokens = [];
+        
+        for (const token of tokens) {
+          try {
+            const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+              token: token,
+              title: announcement.title,
+              body: announcement.content,
+              data: {
+                type: "announcement",
+                announcementId: announcement._id.toString(),
+                createdBy: announcement.createdBy,
+                timestamp: new Date().toISOString()
+              }
+            });
+            
+            if (fcmResponse.data.success) {
+              successCount++;
+            } else {
+              failureCount++;
+              failedTokens.push(token);
+            }
+          } catch (error) {
+            console.error(`[FCM] Error sending to token ${token.substring(0, 20)}...:`, error.message);
+            failureCount++;
+            failedTokens.push(token);
+          }
+        }
+        
+        console.log('[FCM] Notification sent successfully:', {
+          successCount: successCount,
+          failureCount: failureCount,
+          totalTokens: tokens.length
+        });
+        
+        // ลบ invalid tokens
+        if (failedTokens.length > 0) {
+          await User.updateMany(
+            { fcmToken: { $in: failedTokens } },
+            { $unset: { fcmToken: 1 } }
+          );
+          console.log('[FCM] Removed invalid tokens:', failedTokens.length);
+        }
+      } else {
+        console.log('[FCM] No FCM tokens found in database');
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending announcement notification:', fcmError.message);
     }
 
     res.json({

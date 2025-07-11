@@ -830,7 +830,7 @@ router.get('/:roomId', async (req, res) => {
         employeeID: member.empId,
         fullName: isBot ? (botDetails?.name || 'Unknown Bot') : (user?.fullName || 'Unknown User'),
         department: isBot ? 'bot notify' : (user?.department || 'Unknown Department'),
-        profileImage: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${member.empId}.jpg` || null,
+        profileImage: `https://main.onetwotrading.co.th/12Trading/HR/assets/imgs/employee_picture/${member.empId}.jpg` || null,
         role: member.role,
         isAdmin: isAdmin
       };

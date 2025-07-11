@@ -355,7 +355,7 @@ router.get('/getBotByUser/:createdBy', async (req, res) => {
     }
 
     // Find all bots created by the specified user
-    const botDetails = await Bot.find({ createdBy });
+    const botDetails = await Bot.find();
     
     // Get all users with role 'bot' that match these bots
     const bots = await User.find({
@@ -673,6 +673,154 @@ router.delete('/delete-bot', async (req, res) => {
     res.status(500).json({
       statusCode: 500,
       message: 'เกิดข้อผิดพลาดในการลบบอท',
+      error: error.message
+    });
+  }
+});
+
+// Update FCM Token (สำหรับ Flutter app)
+router.post('/fcm-token', async (req, res) => {
+  try {
+    const { user_id, fcm_token, platform, app_version } = req.body;
+
+    if (!user_id || !fcm_token) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'User ID and FCM token are required'
+      });
+    }
+
+    // อัพเดท user record
+    const user = await User.findOneAndUpdate(
+      { employeeID: user_id },
+      {
+        fcmToken: fcm_token,
+        deviceInfo: {
+          platform: platform || 'android',
+          appVersion: app_version || '1.0.0'
+        },
+        lastTokenUpdate: new Date()
+      },
+      { 
+        new: true 
+      }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'User not found'
+      });
+    }
+
+    console.log(`[FCM Token] Updated for user ${user_id}:`, {
+      token: fcm_token.substring(0, 20) + '...',
+      platform,
+      appVersion: app_version
+    });
+
+    res.json({
+      statusCode: 200,
+      message: 'FCM token updated successfully',
+      data: {
+        employeeID: user.employeeID,
+        lastTokenUpdate: user.lastTokenUpdate
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating FCM token:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการอัพเดท FCM token',
+      error: error.message
+    });
+  }
+});
+
+// Update FCM Token (สำหรับ API เรียกโดยตรง)
+router.post('/update-fcm-token', async (req, res) => {
+  try {
+    const { employeeID, fcmToken, deviceInfo } = req.body;
+
+    if (!employeeID || !fcmToken) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'Employee ID and FCM token are required'
+      });
+    }
+
+    // อัพเดทหรือสร้าง user record
+    const user = await User.findOneAndUpdate(
+      { employeeID },
+      {
+        fcmToken,
+        deviceInfo: deviceInfo || {},
+        lastTokenUpdate: new Date()
+      },
+      { 
+        upsert: true, // สร้างใหม่ถ้าไม่มี
+        new: true 
+      }
+    );
+
+    console.log(`[FCM Token] Updated for user ${employeeID}:`, {
+      token: fcmToken.substring(0, 20) + '...',
+      deviceInfo
+    });
+
+    res.json({
+      statusCode: 200,
+      message: 'FCM token updated successfully',
+      data: {
+        employeeID: user.employeeID,
+        lastTokenUpdate: user.lastTokenUpdate
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating FCM token:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการอัพเดท FCM token',
+      error: error.message
+    });
+  }
+});
+
+// Get all FCM tokens (for admin)
+router.get('/fcm-tokens', async (req, res) => {
+  try {
+    const { employeeID } = req.query;
+    
+    // ตรวจสอบว่าเป็น admin
+    const adminUser = await User.findOne({ employeeID, role: 'admin' });
+    if (!adminUser) {
+      return res.status(403).json({
+        statusCode: 403,
+        message: 'เฉพาะ admin เท่านั้นที่สามารถดู FCM tokens ได้'
+      });
+    }
+
+    const users = await User.find({ fcmToken: { $exists: true, $ne: null } })
+      .select('employeeID fcmToken deviceInfo lastTokenUpdate')
+      .sort({ lastTokenUpdate: -1 });
+
+    res.json({
+      statusCode: 200,
+      tokens: users.map(user => ({
+        employeeID: user.employeeID,
+        fcmToken: user.fcmToken,
+        deviceInfo: user.deviceInfo,
+        lastTokenUpdate: user.lastTokenUpdate
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error getting FCM tokens:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการดึง FCM tokens',
       error: error.message
     });
   }

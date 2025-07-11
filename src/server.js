@@ -4,22 +4,35 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config();
+//require('dotenv').config();
+require('dotenv').config({ path: '/var/www/12NotifyAPI/.env' });
 
+// Initialize Firebase Admin SDK
+const { initializeFCM } = require('./services/fcmService');
+initializeFCM();
 const app = express();
 const server = http.createServer(app);
+
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
+    origin: ["*"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
-    transports: ['websocket', 'polling']
+    transports: ['websocket']
   },
-  allowEIO3: true, // Allow Engine.IO v3 clients
+  allowEIO3: true,
   pingTimeout: 60000,
   pingInterval: 25000,
-  maxHttpBufferSize: 1e8, // Increase buffer size for larger messages
-  connectTimeout: 45000, // Increase connection timeout
+  maxHttpBufferSize: 1e8,
+  connectTimeout: 45000,
+  path: '/socket.io/',
+  allowUpgrades: true,
+  cookie: {
+    name: 'io',
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax'
+  }
 });
 
 // Store connected users
@@ -41,7 +54,7 @@ app.use('/uploads/rooms', express.static(path.join(__dirname, '../uploads/rooms'
 app.use('/uploads/directMessage', express.static(path.join(__dirname, '../uploads/directMessage')));
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/notification-system', {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://192.168.2.96/notification-system', {
   useNewUrlParser: true,
   useUnifiedTopology: true
 })
@@ -419,6 +432,7 @@ io.on('connection', (socket) => {
           { 'admin.empId': empId }
         ]
       });
+
       // Get last message for each room
       const roomPromises = rooms.map(async (room) => {
         const lastMessage = await Message.findOne({ room: room._id })
@@ -854,6 +868,7 @@ io.on('connection', (socket) => {
     }
   });
 
+ 
   // Function to update Direct Message chat list
   const updateDirectMessageChatList = async (employeeId, recipientId) => {
     console.log('=== Direct Message Chat List Update ===');
@@ -1091,8 +1106,9 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/direct-messages', require('./routes/directMessageRoutes'));
+app.use('/api/fcm', require('./routes/fcm'));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8006;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

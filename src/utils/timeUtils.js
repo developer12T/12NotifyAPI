@@ -21,8 +21,8 @@ const formatThaiDateTime = (date) => {
 };
 
 const formatThaiDateTimeDirectMessage = (date) => {
+//  const thaiDate = date ? new Date(date.getTime()) : getThaiTime();
   const thaiDate = date ? new Date(date.getTime() + (7 * 60 * 60 * 1000)) : getThaiTime();
-  
   const day = String(thaiDate.getDate()).padStart(2, '0');
   const month = String(thaiDate.getMonth() + 1).padStart(2, '0');
   const year = thaiDate.getFullYear();

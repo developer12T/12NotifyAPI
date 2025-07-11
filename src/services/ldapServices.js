@@ -35,24 +35,21 @@ function transformEntryFormat(entries) {
           case 'mail':
             tempEntry.mail = attr.values[0];
             break;  
-            case 'dn':
+          case 'dn':
             tempEntry.dn = attr.values[0];
             break;
-            case 'title':
+          case 'title':
             tempEntry.title = attr.values[0];
             break;
-            case 'department':
+          case 'department':
             tempEntry.department = attr.values[0];
             break;
-            case 'company':
+          case 'company':
             tempEntry.company = attr.values[0];
             break;
-            case 'distinguishedName':
-            // tempEntry.distinguishedName = attr.values[0];
+          case 'distinguishedName':
             tempEntry.distinguishedName = extractOU(attr.values[0]) == 'User Resign' ? 0 : 1;
             break;
-            
-
         }
       }
     });
@@ -66,7 +63,7 @@ function transformEntryFormat(entries) {
       fullName: tempEntry.fullName ?? null,
       fullNameThai: tempEntry.fullNameThai ?? null,
       mail: tempEntry.mail ?? null,
-      imgUrl: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${tempEntry.employeeID}.jpg`,
+      imgUrl: `https://main.onetwotrading.co.th/12Trading/HR/assets/imgs/employee_picture/${tempEntry.employeeID}.jpg`,
       positon: tempEntry.title ?? null,
       department: tempEntry.department ?? null,
       company: tempEntry.company ?? null,
@@ -117,8 +114,6 @@ function authenticateLDAP(username, password) {
 
       // ใช้ filter ที่รวมทุกเงื่อนไขเลย
       const userFilter = `(&(objectClass=user)(|(sAMAccountName=${username})(userPrincipalName=${username}@onetwotrading.co.th)(mail=${username}@onetwotrading.co.th)))`;
-    //   console.log('ใช้ filter:', userFilter);
-    //   console.log('ค้นหาใน base DN:', LDAP_BASE_DN);
       
       const opts = {
         filter: userFilter,
@@ -128,7 +123,6 @@ function authenticateLDAP(username, password) {
 
       client.search(LDAP_BASE_DN, opts, (searchErr, res) => {
         if (searchErr) {
-        //   console.error('LDAP search error:', searchErr);
           client.unbind();
           resolve({ success: false, message: 'เกิดข้อผิดพลาดในการค้นหาผู้ใช้: ' + searchErr.message });
           return;
@@ -138,13 +132,9 @@ function authenticateLDAP(username, password) {
         const entries = [];
 
         res.on('searchEntry', (entry) => {
-        //   console.log('พบรายการ:', JSON.stringify(entry.pojo.attributes, null, 2));
-          // แปลง DN object เป็น string
           const dnString = entry.objectName.toString();
-        //   console.log('DN ของรายการ:', dnString);
           entries.push(entry.pojo.attributes);
           userDN = dnString;
-        //   console.log('พบ DN ของผู้ใช้:', userDN);
         });
 
         res.on('error', (err) => {
@@ -193,12 +183,9 @@ function verifyPassword(client, userDN, password, entries, resolve) {
         return;
       }
 
-    //   console.log('รหัสผ่านถูกต้อง');
-      
       // กรองและแปลงข้อมูล
-    //   const filteredEntries = filterEntriesWithEmployeeID(entries);
       const transformedEntries = transformEntryFormat(entries);
-    console.log('entries',transformedEntries);
+      console.log('entries', transformedEntries);
 
       newClient.unbind();
       resolve({
@@ -209,198 +196,325 @@ function verifyPassword(client, userDN, password, entries, resolve) {
   });
 }
 
+// ปรับปรุงฟังก์ชัน readLDAP เพื่อจัดการ Size Limit
 function readLDAP(username, password) {
-    return new Promise((resolve, reject) => {
-      console.log('เริ่มการตรวจสอบ LDAP สำหรับผู้ใช้:', username);
+  return new Promise((resolve, reject) => {
+    console.log('เริ่มการอ่านข้อมูล LDAP');
+    
+    const client = ldap.createClient({
+      url: process.env.LDAP_URL,
+      timeout: 5000,
+      connectTimeout: 10000
+    });
+    
+    client.on('error', (err) => {
+      console.error('LDAP client error:', err);
+    });
+    
+    client.on('connectError', (err) => {
+      console.error('LDAP connection error:', err);
+    });
+
+    console.log('กำลังทำการ Bind กับ:', LDAP_BIND_DN);
+    client.bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD, (bindErr) => {
+      if (bindErr) {
+        console.error('LDAP service bind error:', bindErr);
+        client.unbind();
+        resolve({ success: false, message: 'เกิดข้อผิดพลาดในการเชื่อมต่อกับบริการ LDAP: ' + bindErr.message });
+        return;
+      }
       
-      // สร้างการเชื่อมต่อ LDAP
-      const client = ldap.createClient({
-        url: process.env.LDAP_URL,  // แก้ไขเป็น URL ของเซิร์ฟเวอร์ LDAP ของคุณ
-        timeout: 5000, // เพิ่ม timeout
-        connectTimeout: 10000 // เพิ่ม connection timeout
-      });
+      console.log('Bind สำเร็จ กำลังค้นหาผู้ใช้...');
+
+      // ใช้ filter ที่เฉพาะเจาะจงมากขึ้น เพื่อหลีกเลี่ยง Size Limit
+      const filter = '(&(objectClass=user)(employeeID=*))'; // ค้นหาเฉพาะ user ที่มี employeeID
+      console.log('ใช้ filter:', filter);
       
-      // เพิ่ม event handlers สำหรับการดูข้อผิดพลาด
-      client.on('error', (err) => {
-        console.error('LDAP client error:', err);
-      });
-      
-      client.on('connectError', (err) => {
-        console.error('LDAP connection error:', err);
-      });
-  
-      // ใช้ LDAP_BIND_DN และรหัสผ่านเพื่อเชื่อมต่อกับ LDAP ก่อน (bind)
-      console.log('กำลังทำการ Bind กับ:', LDAP_BIND_DN);
-      client.bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD, (bindErr) => {
-        if (bindErr) {
-          console.error('LDAP service bind error:', bindErr);
+      const opts = {
+        filter: filter,
+        scope: 'sub',
+        sizeLimit: 0, // ไม่จำกัดขนาด หรือใช้ 1000
+        timeLimit: 30, // เพิ่มเวลาเป็น 30 วินาที
+        paged: true, // ใช้ paged results เพื่อจัดการข้อมูลจำนวนมาก
+        attributes: ['employeeID','sAMAccountName','givenName','sn','displayName','description','mail','dn','title','department','company','distinguishedName']
+      };
+
+      client.search(LDAP_BASE_DN, opts, (searchErr, res) => {
+        if (searchErr) {
+          console.error('LDAP search error:', searchErr);
           client.unbind();
-          resolve({ success: false, message: 'เกิดข้อผิดพลาดในการเชื่อมต่อกับบริการ LDAP: ' + bindErr.message });
+          resolve({ success: false, message: 'เกิดข้อผิดพลาดในการค้นหา: ' + searchErr.message });
           return;
         }
-        
-        console.log('Bind สำเร็จ กำลังค้นหาผู้ใช้...');
-  
-        // ลองใช้หลายวิธีในการค้นหาผู้ใช้ของ Active Directory
-        // อาจมีการใช้รูปแบบต่างๆกันในแต่ละองค์กร
-        const filter = '(objectClass=*)';
-        console.log('ใช้ filter:', filter);
-        console.log('ค้นหาใน base DN:', LDAP_BASE_DN);
+
+        const entries = [];
+
+        res.on('searchEntry', (entry) => {
+          entries.push(entry.pojo.attributes);
+        });
+
+        res.on('error', (err) => {
+          console.error('Search error:', err);
+          // แม้จะเกิด error ก็ยังคืนข้อมูลที่ได้มาแล้ว
+          if (entries.length > 0) {
+            console.log('ได้ข้อมูลบางส่วน:', entries.length, 'รายการ');
+            processResults();
+          } else {
+            client.unbind();
+            resolve({ success: false, message: 'เกิดข้อผิดพลาดในการค้นหา: ' + err.message });
+          }
+        }); 
+
+        res.on('end', (result) => {
+          console.log('การค้นหาเสร็จสิ้น, พบทั้งหมด:', entries.length, 'รายการ');
+          processResults();
+        });
+
+        function processResults() {
+          if (entries.length === 0) {
+            console.log('ไม่พบข้อมูล');
+            client.unbind();
+            resolve({ success: false, message: 'ไม่พบข้อมูลในระบบ' });
+            return;
+          }
+
+          // กรองข้อมูลก่อนส่งกลับ
+          const filteredEntries = filterEntriesWithEmployeeID(entries);
+          console.log('จำนวนรายการหลังกรอง:', filteredEntries.length);
+
+          // แปลงรูปแบบข้อมูล
+          const transformedEntries = transformEntryFormat(filteredEntries);
+
+          client.unbind();
+          resolve({
+            success: true,
+            entries: transformedEntries
+          });
+        }
+      });
+    });
+  });
+}
+
+// ปรับปรุงฟังก์ชัน readAllLDAP เพื่อใช้ paging
+function readAllLDAP() {
+  return new Promise((resolve, reject) => {
+    const client = ldap.createClient({
+      url: process.env.LDAP_URL,
+      timeout: 5000,
+      connectTimeout: 10000
+    });
+    
+    client.on('error', (err) => {
+      console.error('LDAP client error:', err);
+    });
+    
+    client.on('connectError', (err) => {
+      console.error('LDAP connection error:', err);
+    }); 
+
+    console.log('กำลังทำการ Bind กับ:', LDAP_BIND_DN);
+    client.bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD, (bindErr) => {
+      if (bindErr) {
+        console.error('LDAP service bind error:', bindErr);
+        client.unbind();
+        resolve({ success: false, message: 'เกิดข้อผิดพลาดในการเชื่อมต่อกับบริการ LDAP: ' + bindErr.message });
+        return;
+      }
+      
+      console.log('Bind สำเร็จ กำลังค้นหาข้อมูลทั้งหมด...');
+
+      // ใช้ multiple queries เพื่อหลีกเลี่ยง size limit
+      const queries = [
+        '(&(objectClass=user)(employeeID=*))',  // User accounts with employee ID
+        '(&(objectClass=person)(employeeID=*))', // Person objects with employee ID
+        '(&(objectClass=organizationalPerson)(employeeID=*))' // Organizational persons with employee ID
+      ];
+
+      let allEntries = [];
+      let completedQueries = 0;
+
+      queries.forEach((filter, index) => {
+        console.log(`กำลังค้นหาด้วย filter ${index + 1}:`, filter);
         
         const opts = {
           filter: filter,
           scope: 'sub',
-          sizeLimit: 1000,
-          attributes: ['employeeID','sAMAccountName','givenName','sn','displayName','description','mail','dn','title','department','company','distinguishedName']  // ดึงทุก attributes
-        //   attributes: ['employeeID']  // ดึงทุก attributes
-          // attributes: ['*']  // ดึงทุก attributes
+          sizeLimit: 1000, // จำกัด 1000 รายการต่อ query
+          timeLimit: 30,
+          attributes: ['*'] // ดึงทุก attributes
         };
-  
+
         client.search(LDAP_BASE_DN, opts, (searchErr, res) => {
           if (searchErr) {
-            console.error('LDAP search error:', searchErr);
-            client.unbind();
-            resolve({ success: false, message: 'เกิดข้อผิดพลาดในการค้นหาผู้ใช้: ' + searchErr.message });
+            console.error(`LDAP search error for query ${index + 1}:`, searchErr);
+            completedQueries++;
+            if (completedQueries === queries.length) {
+              finishSearch();
+            }
             return;
           }
-  
-          const entries = [];
-  
-          res.on('searchEntry', (entry) => {
-            // console.log('พบรายการ:', entry.pojo.attributes);
-            entries.push(entry.pojo.attributes);
-          });
-  
-          res.on('error', (err) => {
-            console.error('Search error:', err);
-          }); 
-  
-          res.on('end', (result) => {
-            console.log('การค้นหาเสร็จสิ้น, พบทั้งหมด:', entries.length, 'รายการ');
-            
-            if (entries.length === 0) {
-              console.log('ไม่พบข้อมูล');
-              client.unbind();
-              resolve({ success: false, message: 'ไม่พบข้อมูลในระบบ' });
-              return;
-            }
-  
-            // กรองข้อมูลก่อนส่งกลับ
-            const filteredEntries = filterEntriesWithEmployeeID(entries);
-            console.log('จำนวนรายการหลังกรอง:', filteredEntries.length);
-  
-            // แปลงรูปแบบข้อมูล
-            const transformedEntries = transformEntryFormat(filteredEntries);
 
+          const queryEntries = [];
+
+          res.on('searchEntry', (entry) => {
+            queryEntries.push(entry.pojo.attributes);
+          });
+
+          res.on('error', (err) => {
+            console.error(`Search error for query ${index + 1}:`, err);
+          });
+
+          res.on('end', () => {
+            console.log(`Query ${index + 1} เสร็จสิ้น, พบ:`, queryEntries.length, 'รายการ');
+            allEntries = allEntries.concat(queryEntries);
+            completedQueries++;
             
-  
-            client.unbind();
-            resolve({
-              success: true,
-              entries: transformedEntries
-            });
+            if (completedQueries === queries.length) {
+              finishSearch();
+            }
           });
         });
       });
-    });
-  }
 
-  function readAllLDAP() {
-    return new Promise((resolve, reject) => {
-      
-      // สร้างการเชื่อมต่อ LDAP
-      const client = ldap.createClient({
-        url: process.env.LDAP_URL,  // แก้ไขเป็น URL ของเซิร์ฟเวอร์ LDAP ของคุณ
-        timeout: 5000, // เพิ่ม timeout
-        connectTimeout: 10000 // เพิ่ม connection timeout
-      });
-      
-      // เพิ่ม event handlers สำหรับการดูข้อผิดพลาด
-      client.on('error', (err) => {
-        console.error('LDAP client error:', err);
-      });
-      
-      client.on('connectError', (err) => {
-        console.error('LDAP connection error:', err);
-      }); 
-  
-      // ใช้ LDAP_BIND_DN และรหัสผ่านเพื่อเชื่อมต่อกับ LDAP ก่อน (bind)
-      console.log('กำลังทำการ Bind กับ:', LDAP_BIND_DN);
-      client.bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD, (bindErr) => {
-        if (bindErr) {
-          console.error('LDAP service bind error:', bindErr);
+      function finishSearch() {
+        console.log('การค้นหาทั้งหมดเสร็จสิ้น, พบทั้งหมด:', allEntries.length, 'รายการ');
+        
+        if (allEntries.length === 0) {
+          console.log('ไม่พบข้อมูล');
           client.unbind();
-          resolve({ success: false, message: 'เกิดข้อผิดพลาดในการเชื่อมต่อกับบริการ LDAP: ' + bindErr.message });
+          resolve({ success: false, message: 'ไม่พบข้อมูลในระบบ' });
           return;
         }
-        
-        console.log('Bind สำเร็จ กำลังค้นหาผู้ใช้...');
-  
-        // ลองใช้หลายวิธีในการค้นหาผู้ใช้ของ Active Directory
-        // อาจมีการใช้รูปแบบต่างๆกันในแต่ละองค์กร
-        const filter = '(objectClass=*)';
-        console.log('ใช้ filter:', filter);
-        console.log('ค้นหาใน base DN:', LDAP_BASE_DN);
-        
+
+        // กรองข้อมูลที่ซ้ำกัน (based on employeeID)
+        const uniqueEntries = [];
+        const seenEmployeeIDs = new Set();
+
+        allEntries.forEach(entry => {
+          const employeeIDAttr = entry.find(attr => attr.type === 'employeeID');
+          if (employeeIDAttr && employeeIDAttr.values && employeeIDAttr.values.length > 0) {
+            const employeeID = employeeIDAttr.values[0];
+            if (!seenEmployeeIDs.has(employeeID)) {
+              seenEmployeeIDs.add(employeeID);
+              uniqueEntries.push(entry);
+            }
+          }
+        });
+
+        console.log('จำนวนรายการหลังลบข้อมูลซ้ำ:', uniqueEntries.length);
+
+        client.unbind();
+        resolve({
+          success: true,
+          entries: uniqueEntries
+        });
+      }
+    });
+  });
+}
+
+// เพิ่มฟังก์ชันสำหรับค้นหาแบบ paged
+function searchLDAPWithPaging(filter, pageSize = 100) {
+  return new Promise((resolve, reject) => {
+    const client = ldap.createClient({
+      url: process.env.LDAP_URL,
+      timeout: 10000,
+      connectTimeout: 15000
+    });
+
+    client.bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD, (bindErr) => {
+      if (bindErr) {
+        client.unbind();
+        resolve({ success: false, message: 'Bind error: ' + bindErr.message });
+        return;
+      }
+
+      const allEntries = [];
+      let pageCount = 0;
+
+      function searchPage(cookie = null) {
+        pageCount++;
+        console.log(`กำลังค้นหาหน้าที่ ${pageCount}...`);
+
         const opts = {
           filter: filter,
           scope: 'sub',
-          sizeLimit: 1000,
-          attributes: ['*']  // ดึงทุก attributes
-        //   attributes: ['employeeID']  // ดึงทุก attributes
-          // attributes: ['*']  // ดึงทุก attributes
+          sizeLimit: pageSize,
+          attributes: ['employeeID','sAMAccountName','givenName','sn','displayName','description','mail','dn','title','department','company','distinguishedName']
         };
-  
+
+        // เพิ่ม paged control หากมี cookie
+        if (cookie) {
+          opts.controls = [
+            new ldap.PagedResultsControl({ value: { size: pageSize, cookie: cookie } })
+          ];
+        } else {
+          opts.controls = [
+            new ldap.PagedResultsControl({ value: { size: pageSize } })
+          ];
+        }
+
         client.search(LDAP_BASE_DN, opts, (searchErr, res) => {
           if (searchErr) {
-            console.error('LDAP search error:', searchErr);
+            console.error('Search page error:', searchErr);
             client.unbind();
-            resolve({ success: false, message: 'เกิดข้อผิดพลาดในการค้นหาผู้ใช้: ' + searchErr.message });
+            resolve({ success: false, message: 'Search error: ' + searchErr.message });
             return;
           }
-  
-          const entries = [];
-  
-          res.on('searchEntry', (entry) => {
-            // console.log('พบรายการ:', entry.pojo.attributes);
-            entries.push(entry.pojo.attributes);
-          });
-  
-          res.on('error', (err) => {
-            console.error('Search error:', err);
-          });
-  
-          res.on('end', (result) => {
-            console.log('การค้นหาเสร็จสิ้น, พบทั้งหมด:', entries.length, 'รายการ');
-            
-            if (entries.length === 0) {
-              console.log('ไม่พบข้อมูล');
-              client.unbind();
-              resolve({ success: false, message: 'ไม่พบข้อมูลในระบบ' });
-              return;
-            }
-  
-            // กรองข้อมูลก่อนส่งกลับ
-            const filteredEntries = filterEntriesWithEmployeeID(entries);
-            console.log('จำนวนรายการหลังกรอง:', filteredEntries.length);
-  
-            // แปลงรูปแบบข้อมูล
-            // const transformedEntries = transformEntryFormat(filteredEntries);
 
-            
-  
-            client.unbind();
-            resolve({
-              success: true,
-              entries: filteredEntries
-            });
+          const pageEntries = [];
+          let nextCookie = null;
+
+          res.on('searchEntry', (entry) => {
+            pageEntries.push(entry.pojo.attributes);
+          });
+
+          res.on('page', (result) => {
+            // จัดการ page control response
+            if (result.controls && result.controls.length > 0) {
+              const pageControl = result.controls.find(control => 
+                control instanceof ldap.PagedResultsControl
+              );
+              if (pageControl && pageControl.value.cookie && pageControl.value.cookie.length > 0) {
+                nextCookie = pageControl.value.cookie;
+              }
+            }
+          });
+
+          res.on('error', (err) => {
+            console.error('Page search error:', err);
+          });
+
+          res.on('end', () => {
+            allEntries.push(...pageEntries);
+            console.log(`หน้าที่ ${pageCount} เสร็จสิ้น, พบ ${pageEntries.length} รายการ`);
+
+            // ถ้ามี cookie แสดงว่ายังมีหน้าถัดไป
+            if (nextCookie) {
+              searchPage(nextCookie);
+            } else {
+              // ค้นหาเสร็จสิ้นแล้ว
+              console.log('การค้นหาทั้งหมดเสร็จสิ้น, พบทั้งหมด:', allEntries.length, 'รายการ');
+              
+              const filteredEntries = filterEntriesWithEmployeeID(allEntries);
+              const transformedEntries = transformEntryFormat(filteredEntries);
+
+              client.unbind();
+              resolve({
+                success: true,
+                entries: transformedEntries
+              });
+            }
           });
         });
-      });
+      }
+
+      // เริ่มการค้นหาหน้าแรก
+      searchPage();
     });
-  }
-  
-  
+  });
+}
 
 // Function to extract OU from distinguishedName
 function extractOU(dn) {
@@ -410,40 +524,55 @@ function extractOU(dn) {
 
 async function searchUsers(filter) {
   return new Promise((resolve, reject) => {
-    const tempEntries = [];
-    client.search(LDAP_BASE_DN, {
-      filter: filter,
-      scope: 'sub',
-      attributes: ['cn', 'employeeID', 'distinguishedName']
-    }, (err, res) => { 
-      if (err) {
-        console.error('LDAP search error:', err);
-        reject(err);
+    const client = ldap.createClient({
+      url: process.env.LDAP_URL,
+      timeout: 5000,
+      connectTimeout: 10000
+    });
+
+    client.bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD, (bindErr) => {
+      if (bindErr) {
+        reject(bindErr);
         return;
       }
-      console.log('searchUsers',res);
 
-      res.on('searchEntry', (entry) => {
-        const tempEntry = {};
-        entry.attributes.forEach((attr) => {
-          if (attr.type === 'distinguishedName') {
-            tempEntry.distinguishedName = attr.values[0];
-            // Extract OU from distinguishedName
-            tempEntry.ou = extractOU(attr.values[0]);
-          } else {
-            tempEntry[attr.type] = attr.values[0];
-          }
+      const tempEntries = [];
+      client.search(LDAP_BASE_DN, {
+        filter: filter,
+        scope: 'sub',
+        sizeLimit: 100, // จำกัดจำนวนผลลัพธ์
+        attributes: ['cn', 'employeeID', 'distinguishedName']
+      }, (err, res) => { 
+        if (err) {
+          console.error('LDAP search error:', err);
+          client.unbind();
+          reject(err);
+          return;
+        }
+
+        res.on('searchEntry', (entry) => {
+          const tempEntry = {};
+          entry.attributes.forEach((attr) => {
+            if (attr.type === 'distinguishedName') {
+              tempEntry.distinguishedName = attr.values[0];
+              tempEntry.ou = extractOU(attr.values[0]);
+            } else {
+              tempEntry[attr.type] = attr.values[0];
+            }
+          });
+          tempEntries.push(tempEntry);
         });
-        tempEntries.push(tempEntry);
-      });
 
-      res.on('end', () => {
-        resolve(tempEntries);
-      });
+        res.on('end', () => {
+          client.unbind();
+          resolve(tempEntries);
+        });
 
-      res.on('error', (err) => {
-        console.error('LDAP search error:', err);
-        reject(err);
+        res.on('error', (err) => {
+          console.error('LDAP search error:', err);
+          client.unbind();
+          reject(err);
+        });
       });
     });
   });
@@ -451,8 +580,6 @@ async function searchUsers(filter) {
 
 function findUserByEmployeeId(employeeId) {
   return new Promise((resolve, reject) => {
-    // console.log('ค้นหาผู้ใช้ด้วย Employee ID:', employeeId);
-    
     const client = ldap.createClient({
       url: process.env.LDAP_URL,
       timeout: 5000,
@@ -474,17 +601,15 @@ function findUserByEmployeeId(employeeId) {
         resolve({ success: false, message: 'เกิดข้อผิดพลาดในการเชื่อมต่อกับบริการ LDAP: ' + bindErr.message });
         return;
       }
-      
-      // console.log('Bind สำเร็จ กำลังค้นหาผู้ใช้...');
 
       // สร้าง filter สำหรับค้นหาเฉพาะ employeeID ที่ต้องการ
-      const filter = `(&(objectClass=*)(employeeID=${employeeId}))`;
-      // console.log('ใช้ filter:', filter);
+      const filter = `(&(objectClass=user)(employeeID=${employeeId}))`;
       
       const opts = {
         filter: filter,
         scope: 'sub',
         sizeLimit: 1, // ต้องการเพียง 1 รายการ
+        timeLimit: 10, // จำกัดเวลา 10 วินาที
         attributes: [
           'employeeID',
           'sAMAccountName',
@@ -505,47 +630,63 @@ function findUserByEmployeeId(employeeId) {
         if (searchErr) {
           console.error('LDAP search error:', searchErr);
           client.unbind();
-          resolve({ success: false, message: 'เกิดข้อผิดพลาดในการค้นหาผู้ใช้: ' + searchErr.message });
+          resolve({ 
+            success: false, 
+            message: 'เกิดข้อผิดพลาดในการค้นหาผู้ใช้: ' + searchErr.message 
+          });
           return;
         }
 
-        let userEntry = null;
-
-        res.on('searchEntry', (entry) => {
-          userEntry = entry.pojo.attributes;
-        });
-
-        res.on('error', (err) => {
-          console.error('Search error:', err);
-        });
-
-        res.on('end', (result) => {
-          client.unbind();
-          
-          if (!userEntry) {
-            resolve({ 
-              success: false, 
-              message: `ไม่พบผู้ใช้ที่มี Employee ID: ${employeeId}` 
-            });
-            return;
-          }
-
-          // แปลงข้อมูลให้อยู่ในรูปแบบเดียวกับที่ใช้ในระบบ
-          const transformedEntry = transformEntryFormat([userEntry])[0];
-          
-          // เพิ่ม imgUrl เข้าไปในข้อมูลผู้ใช้
-          const userWithImage = {
-            ...transformedEntry,
-            imgUrl: `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${transformedEntry.employeeID}.jpg`
-          };
-          
-          resolve({
-            success: true,
-            user: userWithImage
-          });
-        });
+        handleSearchResult(res, employeeId, client, resolve);
       });
     });
+  });
+}
+
+// แยกฟังก์ชันจัดการผลลัพธ์การค้นหาออกมา
+function handleSearchResult(res, employeeId, client, resolve) {
+  let userEntry = null;
+
+  res.on('searchEntry', (entry) => {
+    userEntry = entry.pojo.attributes;
+  });
+
+  res.on('error', (err) => {
+    console.error('Search result error:', err);
+  });
+
+  res.on('end', (result) => {
+    client.unbind();
+    
+    if (!userEntry) {
+      resolve({ 
+        success: false, 
+        message: `ไม่พบผู้ใช้ที่มี Employee ID: ${employeeId}` 
+      });
+      return;
+    }
+
+    try {
+      // แปลงข้อมูลให้อยู่ในรูปแบบเดียวกับที่ใช้ในระบบ
+      const transformedEntry = transformEntryFormat([userEntry])[0];
+      
+      // เพิ่ม imgUrl เข้าไปในข้อมูลผู้ใช้
+      const userWithImage = {
+        ...transformedEntry,
+        imgUrl: `https://main.onetwotrading.co.th/12Trading/HR/assets/imgs/employee_picture/${transformedEntry.employeeID}.jpg`
+      };
+      
+      resolve({
+        success: true,
+        user: userWithImage
+      });
+    } catch (error) {
+      console.error('Error transforming user data:', error);
+      resolve({ 
+        success: false, 
+        message: 'เกิดข้อผิดพลาดในการประมวลผลข้อมูลผู้ใช้' 
+      });
+    }
   });
 }
 
@@ -556,5 +697,6 @@ module.exports = {
   filterEntriesWithEmployeeID,
   transformEntryFormat,
   findUserByEmployeeId,
-  searchUsers
-}; 
+  searchUsers,
+  searchLDAPWithPaging // เพิ่มฟังก์ชันใหม่
+};

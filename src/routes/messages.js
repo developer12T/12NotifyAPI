@@ -115,7 +115,7 @@ async function getSenderDetails(employeeId) {
       fullName: bot.name,
       department: 'bot notify',
       role: 'bot',
-      imgUrl: 'http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/65166.jpg'
+      imgUrl: 'https://main.onetwotrading.co.th/12Trading/HR/assets/imgs/employee_picture/65166.jpg'
     };
   } else {
     const userDetails = await findUserByEmployeeId(employeeId);
@@ -197,7 +197,7 @@ router.post('/send', async (req, res) => {
           replyToSenderDetails = await getSenderDetails(originalMessage.sender);
           // Add profileImage URL for users
           if (replyToSenderDetails.role !== 'bot') {
-            replyToSenderDetails.profileImage = `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${replyToSenderDetails.employeeID}.jpg`;
+            replyToSenderDetails.profileImage = `https://main.onetwotrading.co.th/12Trading/HR/assets/imgs/employee_picture/${replyToSenderDetails.employeeID}.jpg`;
           }
         } catch (error) {
           console.warn('Failed to get reply sender details:', error.message);
@@ -1045,7 +1045,7 @@ router.delete('/:messageId', async (req, res) => {
             fullName: senderDetails.fullNameThai,
             department: senderDetails.department,
             profileImage: senderDetails.role === 'bot' ? senderDetails.imgUrl : 
-              `http://58.181.206.156:8080/12Trading/HR/assets/imgs/employee_picture/${senderDetails.employeeID}.jpg`,
+              `https://main.onetwotrading.co.th/12Trading/HR/assets/imgs/employee_picture/${senderDetails.employeeID}.jpg`,
             role: senderDetails.role
           },
           timestamp: lastMessage.createdAt,

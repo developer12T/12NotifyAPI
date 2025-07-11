@@ -990,7 +990,7 @@ router.get('/conversations', async (req, res) => {
           unreadCount: 1,
           _id: 0
         }
-      },
+         },
       {
         $sort: { 'lastMessage.createdAt': -1 }
       }
