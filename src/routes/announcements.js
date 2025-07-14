@@ -79,20 +79,24 @@ router.post('/send', upload.single('image'), async (req, res) => {
 
     // ส่ง FCM notification ไปยังผู้ใช้ทั้งหมด
     try {
-      // ดึง FCM tokens จาก database
+      // ดึง FCM tokens จาก database (ส่งให้ทุกคนรวมถึงคนที่สร้างประกาศ)
       const usersWithTokens = await User.find({ 
-        fcmToken: { $exists: true, $ne: null } 
-      }).select('fcmToken');
+        fcmToken: { $exists: true, $ne: null }
+      }).select('fcmToken employeeID');
       
       if (usersWithTokens.length > 0) {
-        const tokens = usersWithTokens.map(user => user.fcmToken);
+        // เอาเฉพาะ unique tokens เพื่อป้องกันการส่งซ้ำ
+        const uniqueTokens = [...new Set(usersWithTokens.map(user => user.fcmToken))];
+        const userIds = usersWithTokens.map(user => user.employeeID);
+        
+        console.log(`[FCM] Sending notification to ${uniqueTokens.length} unique users:`, userIds);
         
         // ส่งไปยังแต่ละ token แยกกัน
         let successCount = 0;
         let failureCount = 0;
         const failedTokens = [];
         
-        for (const token of tokens) {
+        for (const token of uniqueTokens) {
           try {
             const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
               token: token,
@@ -108,9 +112,11 @@ router.post('/send', upload.single('image'), async (req, res) => {
             
             if (fcmResponse.data.success) {
               successCount++;
+              console.log(`[FCM] Successfully sent to token: ${token.substring(0, 20)}...`);
             } else {
               failureCount++;
               failedTokens.push(token);
+              console.log(`[FCM] Failed to send to token: ${token.substring(0, 20)}...`);
             }
           } catch (error) {
             console.error(`[FCM] Error sending to token ${token.substring(0, 20)}...:`, error.message);
@@ -122,7 +128,8 @@ router.post('/send', upload.single('image'), async (req, res) => {
         console.log('[FCM] Notification sent successfully:', {
           successCount: successCount,
           failureCount: failureCount,
-          totalTokens: tokens.length
+          totalTokens: uniqueTokens.length,
+          uniqueTokens: uniqueTokens.length
         });
         
         // ลบ invalid tokens

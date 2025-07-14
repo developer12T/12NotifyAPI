@@ -22,6 +22,19 @@ const botSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  fcmToken: {
+    type: String,
+    default: null
+  },
+  deviceInfo: {
+    platform: String,
+    appVersion: String,
+    deviceModel: String
+  },
+  lastTokenUpdate: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -209,6 +209,115 @@ router.post('/test-single', async (req, res) => {
   }
 });
 
+// Test notification with predefined body
+router.post('/test-notification-body', async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Token is required'
+      });
+    }
+
+    const admin = require('firebase-admin');
+    const messaging = admin.messaging();
+
+    // Predefined test notification body
+    const message = {
+      notification: {
+        title: '🔔 ประกาศใหม่จาก 12NotifyAPI',
+        body: 'นี่คือการทดสอบการส่ง notification จากระบบ 12NotifyAPI'
+      },
+      data: {
+        type: 'test_notification',
+        category: 'announcement',
+        priority: 'high',
+        timestamp: new Date().toISOString(),
+        messageId: `test_${Date.now()}`,
+        deepLink: '12notify://announcement/test',
+        badge: '1',
+        sound: 'default'
+      },
+      token: "cqXlsQ8xScezDR6O7dD7I0:APA91bF-zyL5tY7L-m91T99UbXniylokWqGHDq22GcDnhbSajHxtUjE0ifxXBcdcDXa7AGSeabikketBu2-N9sxRp-GXKIfehwcAcutZn15obgGkc2SinSo",
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'high_importance_channel',
+          priority: 'high',
+          sound: 'default',
+          icon: 'ic_notification',
+          color: '#FF5722',
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          tag: 'test_notification'
+        }
+      },
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title: '🔔 ประกาศใหม่จาก 12NotifyAPI',
+              body: 'นี่คือการทดสอบการส่ง notification จากระบบ 12NotifyAPI'
+            },
+            sound: 'default',
+            badge: 1,
+            category: 'test_notification',
+            'mutable-content': 1
+          },
+          '12notify': {
+            type: 'test_notification',
+            deepLink: '12notify://announcement/test'
+          }
+        }
+      },
+      webpush: {
+        notification: {
+          title: '🔔 ประกาศใหม่จาก 12NotifyAPI',
+          body: 'นี่คือการทดสอบการส่ง notification จากระบบ 12NotifyAPI',
+          icon: '/icon-192x192.png',
+          badge: '/badge-72x72.png',
+          tag: 'test_notification',
+          requireInteraction: true
+        },
+        fcmOptions: {
+          link: 'https://12notify.com/announcement/test'
+        }
+      }
+    };
+
+    console.log('Sending test notification with predefined body to token:', token.substring(0, 20) + '...');
+    
+    const response = await messaging.send(message);
+    
+    console.log('Test notification sent successfully:', response);
+    
+    res.json({
+      success: true,
+      message: 'Test notification with predefined body sent successfully',
+      messageId: response,
+      notificationDetails: {
+        title: message.notification.title,
+        body: message.notification.body,
+        data: message.data,
+        platforms: {
+          android: !!message.android,
+          ios: !!message.apns,
+          web: !!message.webpush
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Test notification error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code
+    });
+  }
+});
+
 // Test Firebase configuration
 router.get('/test-config', async (req, res) => {
   try {

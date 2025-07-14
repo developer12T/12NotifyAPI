@@ -6,6 +6,8 @@ const { getThaiTime, getThaiTimeISOString, formatThaiDateTime, formatThaiDateTim
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios'); // Added for FCM notification
+const User = require('../models/User'); // Added for FCM notification
 
 // สร้าง folder ถ้ายังไม่มี
 const uploadDir = path.join(__dirname, '../../uploads/directMessage');
@@ -237,6 +239,51 @@ router.post('/send', async (req, res) => {
       io.emit('newDirectMessageNotification', notificationData);
     } else {
       console.error('Socket.IO instance not found!');
+    }
+
+    // ส่ง FCM notification ไปยังผู้รับข้อความ
+    try {
+      // ดึง FCM token ของผู้รับ
+      const recipientUser = await User.findOne({ 
+        employeeID: recipientId,
+        fcmToken: { $exists: true, $ne: null }
+      }).select('fcmToken employeeID');
+      
+      if (recipientUser && recipientUser.fcmToken) {
+        console.log(`[FCM] Sending direct message notification to ${recipientId}:`, {
+          token: recipientUser.fcmToken.substring(0, 20) + '...'
+        });
+        
+        try {
+          const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+            token: recipientUser.fcmToken,
+            title: `💬 ${userDetails.user.fullNameThai}`,
+            body: message.length > 50 ? message.substring(0, 50) + '...' : message,
+            data: {
+              type: "direct_message",
+              messageId: newMessage._id.toString(),
+              senderId: employeeId,
+              senderName: userDetails.user.fullNameThai,
+              recipientId: recipientId,
+              timestamp: new Date().toISOString(),
+              isReply: replyToId ? "true" : "false",
+              replyToId: replyToId ? replyToId.toString() : ""
+            }
+          });
+          
+          if (fcmResponse.data.success) {
+            console.log(`[FCM] Direct message notification sent successfully to ${recipientId}`);
+          } else {
+            console.log(`[FCM] Failed to send direct message notification to ${recipientId}`);
+          }
+        } catch (error) {
+          console.error(`[FCM] Error sending direct message notification to ${recipientId}:`, error.message);
+        }
+      } else {
+        console.log(`[FCM] No FCM token found for recipient ${recipientId}`);
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending direct message notification:', fcmError.message);
     }
 
     // ถ้ามี replyToId ให้ดึงข้อมูลผู้ส่งของข้อความที่ตอบกลับสำหรับ response

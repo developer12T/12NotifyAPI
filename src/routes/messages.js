@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const Message = require('../models/Message');
 const Room = require('../models/Room');
 const User = require('../models/User');
@@ -320,6 +321,97 @@ router.post('/send', async (req, res) => {
     };
     io.emit('newMessageNotification', notificationData);
     console.log('Notification broadcasted for new message');
+
+    // ส่ง FCM notification ไปยังผู้ใช้ในห้องแชท
+    try {
+      // ดึง FCM tokens ของสมาชิกในห้อง (ยกเว้นคนที่ส่งข้อความ)
+      const roomMembers = room.members.map(member => member.empId);
+      
+      // ดึง tokens จากทั้ง User และ Bot models (ไม่รวม simulated bot tokens)
+      const usersWithTokens = await User.find({ 
+        employeeID: { $in: roomMembers },
+        fcmToken: { $exists: true, $ne: null },
+        employeeID: { $ne: employeeId } // ไม่ส่งให้ตัวเอง
+      }).select('fcmToken employeeID role');
+      
+      // ไม่ต้องดึง bot tokens เพราะ bot ไม่ต้องรับ notification
+      // const botsWithTokens = await Bot.find({ 
+      //   employeeID: { $in: roomMembers },
+      //   fcmToken: { $exists: true, $ne: null },
+      //   employeeID: { $ne: employeeId },
+      //   fcmToken: { $not: /^bot_/ }
+      // }).select('fcmToken employeeID');
+      
+      // รวม tokens จาก user เท่านั้น (bot ไม่ต้องรับ notification)
+      const allTokens = [
+        ...usersWithTokens.map(user => ({ token: user.fcmToken, employeeID: user.employeeID, type: 'user' }))
+      ];
+      
+      if (allTokens.length > 0) {
+        // เอาเฉพาะ unique tokens เพื่อป้องกันการส่งซ้ำ
+        const uniqueTokens = [...new Set(allTokens.map(item => item.token))];
+        const userIds = allTokens.map(item => item.employeeID);
+        
+        console.log(`[FCM] Sending chat notification to ${uniqueTokens.length} users in room ${roomId}:`, userIds);
+        
+        // ส่งไปยังแต่ละ token แยกกัน
+        let successCount = 0;
+        let failureCount = 0;
+        const failedTokens = [];
+        
+        for (const token of uniqueTokens) {
+          try {
+            const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+              token: token,
+              title: `💬 ${sender.fullName}`,
+              body: messageText.length > 50 ? messageText.substring(0, 50) + '...' : messageText,
+              data: {
+                type: "chat_message",
+                roomId: roomId.toString(),
+                roomName: room.name,
+                messageId: messageObj._id.toString(),
+                senderId: employeeId,
+                senderName: sender.fullName,
+                timestamp: new Date().toISOString(),
+                isReply: replyToId ? "true" : "false",
+                replyToId: replyToId ? replyToId.toString() : ""
+              }
+            });
+            
+            if (fcmResponse.data.success) {
+              successCount++;
+              console.log(`[FCM] Chat notification sent to token: ${token.substring(0, 20)}...`);
+            } else {
+              failureCount++;
+              failedTokens.push(token);
+              console.log(`[FCM] Failed to send chat notification to token: ${token.substring(0, 20)}...`);
+            }
+          } catch (error) {
+            console.error(`[FCM] Error sending chat notification to token ${token.substring(0, 20)}...:`, error.message);
+            failureCount++;
+            failedTokens.push(token);
+          }
+        }
+        
+        console.log('[FCM] Chat notification sent successfully:', {
+          successCount: successCount,
+          failureCount: failureCount,
+          totalTokens: uniqueTokens.length,
+          roomId: roomId,
+          roomName: room.name
+        });
+        
+        // Log invalid tokens แต่ไม่ลบออก
+        if (failedTokens.length > 0) {
+          console.log('[FCM] Invalid tokens found in chat notification (not removed):', failedTokens.length);
+          console.log('[FCM] Failed tokens:', failedTokens.map(token => token.substring(0, 20) + '...'));
+        }
+      } else {
+        console.log(`[FCM] No FCM tokens found for room ${roomId} members`);
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending chat notification:', fcmError.message);
+    }
 
     // Response data
     const responseData = {

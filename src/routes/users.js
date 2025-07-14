@@ -276,19 +276,62 @@ router.post('/create-bot', async (req, res) => {
       });
     }
  
+    // สร้าง FCM token จริงสำหรับ bot
+    let botFcmToken = null;
+    try {
+      // ใช้ Firebase Admin SDK สร้าง FCM token จริง
+      const admin = require('firebase-admin');
+      if (admin.apps.length > 0) {
+        // สร้าง FCM token จริงสำหรับ bot
+        const messaging = admin.messaging();
+        // สร้าง device token registration สำหรับ bot
+        botFcmToken = await messaging.getToken({
+          topic: `bot_${newEmployeeID}`,
+          data: {
+            employeeID: newEmployeeID,
+            role: 'bot',
+            name: name
+          }
+        });
+        console.log(`[Bot Creation] Generated real FCM token for bot ${newEmployeeID}: ${botFcmToken.substring(0, 20)}...`);
+      } else {
+        // Fallback: สร้าง simulated token ถ้า Firebase ไม่พร้อม
+        botFcmToken = `bot_${newEmployeeID}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        console.log(`[Bot Creation] Generated simulated token for bot ${newEmployeeID}: ${botFcmToken.substring(0, 20)}...`);
+      }
+    } catch (tokenError) {
+      console.log(`[Bot Creation] Could not generate FCM token for bot ${newEmployeeID}:`, tokenError.message);
+      // Fallback: สร้าง simulated token
+      botFcmToken = `bot_${newEmployeeID}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+
     // Create new bot
     const newBot = new Bot({
       employeeID: newEmployeeID,
       name,
       roomCount: roomCount || 0,
       requestCount: requestCount || 0,
-      createdBy
+      createdBy,
+      fcmToken: botFcmToken,
+      deviceInfo: {
+        platform: 'nodejs-service',
+        appVersion: '1.0.0',
+        deviceModel: 'Bot Service'
+      },
+      lastTokenUpdate: new Date()
     });
 
     // Create new user with bot role
     const newUser = new User({
       employeeID: newEmployeeID,
-      role: 'bot'
+      role: 'bot',
+      fcmToken: botFcmToken,
+      deviceInfo: {
+        platform: 'nodejs-service',
+        appVersion: '1.0.0',
+        deviceModel: 'Bot Service'
+      },
+      lastTokenUpdate: new Date()
     });
 
     // Save both bot and user
@@ -821,6 +864,293 @@ router.get('/fcm-tokens', async (req, res) => {
     res.status(500).json({
       statusCode: 500,
       message: 'เกิดข้อผิดพลาดในการดึง FCM tokens',
+      error: error.message
+    });
+  }
+});
+
+// Get bot FCM token
+router.get('/bot-token/:employeeID', async (req, res) => {
+  try {
+    const { employeeID } = req.params;
+
+    if (!employeeID) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'Employee ID is required'
+      });
+    }
+
+    // ตรวจสอบว่าเป็น bot หรือไม่
+    const bot = await Bot.findOne({ employeeID });
+    if (!bot) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'ไม่พบข้อมูลบอท'
+      });
+    }
+
+    // ดึง token จาก Bot model
+    const botToken = await Bot.findOne({ employeeID }).select('fcmToken deviceInfo lastTokenUpdate');
+    
+    if (!botToken || !botToken.fcmToken) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'บอทไม่มี FCM token',
+        data: {
+          employeeID: employeeID,
+          hasToken: false
+        }
+      });
+    }
+
+    console.log(`[Bot Token] Retrieved token for bot ${employeeID}:`, {
+      token: botToken.fcmToken.substring(0, 20) + '...',
+      lastUpdate: botToken.lastTokenUpdate
+    });
+
+    res.json({
+      statusCode: 200,
+      message: 'ดึง FCM token ของบอทสำเร็จ',
+      data: {
+        employeeID: employeeID,
+        fcmToken: botToken.fcmToken,
+        deviceInfo: botToken.deviceInfo,
+        lastTokenUpdate: botToken.lastTokenUpdate,
+        hasToken: true
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting bot token:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการดึง FCM token ของบอท',
+      error: error.message
+    });
+  }
+});
+
+// Update bot FCM token
+router.post('/update-bot-token', async (req, res) => {
+  try {
+    const { employeeID, fcmToken, deviceInfo } = req.body;
+
+    if (!employeeID || !fcmToken) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'Employee ID and FCM token are required'
+      });
+    }
+
+    // ตรวจสอบว่าเป็น bot หรือไม่
+    const bot = await Bot.findOne({ employeeID });
+    if (!bot) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'ไม่พบข้อมูลบอท'
+      });
+    }
+
+    // อัพเดท token ใน Bot model
+    const updatedBot = await Bot.findOneAndUpdate(
+      { employeeID },
+      {
+        fcmToken,
+        deviceInfo: deviceInfo || {
+          platform: 'nodejs-service',
+          appVersion: '1.0.0',
+          deviceModel: 'Bot Service'
+        },
+        lastTokenUpdate: new Date()
+      },
+      { new: true }
+    );
+
+    // อัพเดท token ใน User model ด้วย (ถ้ามี)
+    await User.findOneAndUpdate(
+      { employeeID, role: 'bot' },
+      {
+        fcmToken,
+        deviceInfo: deviceInfo || {
+          platform: 'nodejs-service',
+          appVersion: '1.0.0',
+          deviceModel: 'Bot Service'
+        },
+        lastTokenUpdate: new Date()
+      }
+    );
+
+    console.log(`[Bot Token] Updated token for bot ${employeeID}:`, {
+      token: fcmToken.substring(0, 20) + '...',
+      deviceInfo: deviceInfo
+    });
+
+    res.json({
+      statusCode: 200,
+      message: 'อัพเดท FCM token ของบอทสำเร็จ',
+      data: {
+        employeeID: employeeID,
+        lastTokenUpdate: updatedBot.lastTokenUpdate,
+        deviceInfo: updatedBot.deviceInfo
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating bot token:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการอัพเดท FCM token ของบอท',
+      error: error.message
+    });
+  }
+});
+
+// Get all bot tokens (for admin)
+router.get('/bot-tokens', async (req, res) => {
+  try {
+    const { employeeID } = req.query;
+    
+    // ตรวจสอบว่าเป็น admin
+    const adminUser = await User.findOne({ employeeID, role: 'admin' });
+    if (!adminUser) {
+      return res.status(403).json({
+        statusCode: 403,
+        message: 'เฉพาะ admin เท่านั้นที่สามารถดู FCM tokens ของบอทได้'
+      });
+    }
+
+    const botsWithTokens = await Bot.find({ 
+      fcmToken: { $exists: true, $ne: null } 
+    }).select('employeeID fcmToken deviceInfo lastTokenUpdate name')
+      .sort({ lastTokenUpdate: -1 });
+
+    res.json({
+      statusCode: 200,
+      message: 'ดึง FCM tokens ของบอททั้งหมดสำเร็จ',
+      data: {
+        totalBots: botsWithTokens.length,
+        bots: botsWithTokens.map(bot => ({
+          employeeID: bot.employeeID,
+          name: bot.name,
+          fcmToken: bot.fcmToken,
+          deviceInfo: bot.deviceInfo,
+          lastTokenUpdate: bot.lastTokenUpdate
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting bot tokens:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการดึง FCM tokens ของบอท',
+      error: error.message
+    });
+  }
+});
+
+// Generate FCM token for existing bot
+router.post('/generate-bot-token', async (req, res) => {
+  try {
+    const { employeeID } = req.body;
+
+    if (!employeeID) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: 'Employee ID is required'
+      });
+    }
+
+    // ตรวจสอบว่าเป็น bot หรือไม่
+    const bot = await Bot.findOne({ employeeID });
+    if (!bot) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: 'ไม่พบข้อมูลบอท'
+      });
+    }
+
+    // สร้าง FCM token จริงสำหรับ bot
+    let botFcmToken = null;
+    try {
+      // ใช้ Firebase Admin SDK สร้าง FCM token จริง
+      const admin = require('firebase-admin');
+      if (admin.apps.length > 0) {
+        // สร้าง FCM token จริงสำหรับ bot
+        const messaging = admin.messaging();
+        // สร้าง device token registration สำหรับ bot
+        botFcmToken = await messaging.getToken({
+          topic: `bot_${employeeID}`,
+          data: {
+            employeeID: employeeID,
+            role: 'bot',
+            name: bot.name
+          }
+        });
+        console.log(`[Bot Token] Generated real FCM token for bot ${employeeID}: ${botFcmToken.substring(0, 20)}...`);
+      } else {
+        // Fallback: สร้าง simulated token ถ้า Firebase ไม่พร้อม
+        botFcmToken = `bot_${employeeID}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        console.log(`[Bot Token] Generated simulated token for bot ${employeeID}: ${botFcmToken.substring(0, 20)}...`);
+      }
+    } catch (tokenError) {
+      console.log(`[Bot Token] Could not generate FCM token for bot ${employeeID}:`, tokenError.message);
+      // Fallback: สร้าง simulated token
+      botFcmToken = `bot_${employeeID}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+    
+    // อัพเดท token ใน Bot model
+    const updatedBot = await Bot.findOneAndUpdate(
+      { employeeID },
+      {
+        fcmToken: botFcmToken,
+        deviceInfo: {
+          platform: 'nodejs-service',
+          appVersion: '1.0.0',
+          deviceModel: 'Bot Service'
+        },
+        lastTokenUpdate: new Date()
+      },
+      { new: true }
+    );
+
+    // อัพเดท token ใน User model ด้วย
+    await User.findOneAndUpdate(
+      { employeeID, role: 'bot' },
+      {
+        fcmToken: botFcmToken,
+        deviceInfo: {
+          platform: 'nodejs-service',
+          appVersion: '1.0.0',
+          deviceModel: 'Bot Service'
+        },
+        lastTokenUpdate: new Date()
+      }
+    );
+
+    console.log(`[Bot Token] Generated new token for bot ${employeeID}:`, {
+      token: botFcmToken.substring(0, 20) + '...',
+      name: bot.name
+    });
+
+    res.json({
+      statusCode: 200,
+      message: 'สร้าง FCM token สำหรับบอทสำเร็จ',
+      data: {
+        employeeID: employeeID,
+        name: bot.name,
+        fcmToken: botFcmToken,
+        deviceInfo: updatedBot.deviceInfo,
+        lastTokenUpdate: updatedBot.lastTokenUpdate
+      }
+    });
+
+  } catch (error) {
+    console.error('Error generating bot token:', error);
+    res.status(500).json({
+      statusCode: 500,
+      message: 'เกิดข้อผิดพลาดในการสร้าง FCM token สำหรับบอท',
       error: error.message
     });
   }
