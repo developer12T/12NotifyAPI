@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 //require('dotenv').config();
-require('dotenv').config({ path: '/var/www/12NotifyAPI/.env' });
+// require('dotenv').config({ path: '/var/www/12NotifyAPI/.env' });
 
 // Initialize Firebase Admin SDK
 const { initializeFCM } = require('./services/fcmService');
@@ -1109,7 +1109,7 @@ app.use('/api/direct-messages', require('./routes/directMessageRoutes'));
 app.use('/api/fcm', require('./routes/fcm'));
 app.use('/api', require('./routes/appVersion'));
 
-const PORT = process.env.PORT || 8006;
+const PORT = process.env.PORT;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
