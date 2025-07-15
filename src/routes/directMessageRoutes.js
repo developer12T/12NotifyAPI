@@ -590,6 +590,49 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       io.emit('newDirectMessageNotification', notificationData);
     }
 
+    // Send FCM push notification for direct message image
+    try {
+      const axios = require('axios');
+      
+      // Get recipient's FCM token
+      const User = require('../models/User');
+      const recipientUser = await User.findOne({
+        employeeID: recipientId,
+        fcmToken: { $exists: true, $ne: null }
+      });
+
+      if (recipientUser && recipientUser.fcmToken) {
+        try {
+          const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+            token: recipientUser.fcmToken,
+            title: `💬 ${userDetails.user.fullName}`,
+            body: 'ส่งรูปภาพ',
+            data: {
+              type: "direct_message",
+              senderId: userDetails.user.employeeID,
+              senderName: userDetails.user.fullName,
+              messageId: newMessage._id.toString(),
+              timestamp: new Date().toISOString(),
+              isReply: replyToId ? "true" : "false",
+              replyToId: replyToId ? replyToId.toString() : ""
+            }
+          });
+          
+          if (fcmResponse.data.success) {
+            console.log(`[FCM] Direct image notification sent to recipient ${recipientId}`);
+          } else {
+            console.log(`[FCM] Failed to send direct image notification to recipient ${recipientId}`);
+          }
+        } catch (error) {
+          console.error(`[FCM] Error sending direct image notification to recipient ${recipientId}:`, error.message);
+        }
+      } else {
+        console.log(`[FCM] No FCM token found for recipient ${recipientId}`);
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending direct image notification:', fcmError.message);
+    }
+
     // Format response with Thai time
     const formattedMessage = {
       ...newMessage.toObject(),
@@ -866,6 +909,49 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
         success: true
       };
       io.emit('newDirectMessageNotification', notificationData);
+    }
+
+    // Send FCM push notification for direct message file
+    try {
+      const axios = require('axios');
+      
+      // Get recipient's FCM token
+      const User = require('../models/User');
+      const recipientUser = await User.findOne({
+        employeeID: recipientId,
+        fcmToken: { $exists: true, $ne: null }
+      });
+
+      if (recipientUser && recipientUser.fcmToken) {
+        try {
+          const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+            token: recipientUser.fcmToken,
+            title: `💬 ${userDetails.user.fullName}`,
+            body: `ส่งไฟล์ ${originalFilename}`,
+            data: {
+              type: "direct_message",
+              senderId: userDetails.user.employeeID,
+              senderName: userDetails.user.fullName,
+              messageId: newMessage._id.toString(),
+              timestamp: new Date().toISOString(),
+              isReply: replyToId ? "true" : "false",
+              replyToId: replyToId ? replyToId.toString() : ""
+            }
+          });
+          
+          if (fcmResponse.data.success) {
+            console.log(`[FCM] Direct file notification sent to recipient ${recipientId}`);
+          } else {
+            console.log(`[FCM] Failed to send direct file notification to recipient ${recipientId}`);
+          }
+        } catch (error) {
+          console.error(`[FCM] Error sending direct file notification to recipient ${recipientId}:`, error.message);
+        }
+      } else {
+        console.log(`[FCM] No FCM token found for recipient ${recipientId}`);
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending direct file notification:', fcmError.message);
     }
 
     // Format response with Thai time

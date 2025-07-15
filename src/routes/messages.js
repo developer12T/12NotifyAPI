@@ -591,6 +591,88 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       console.log('Notification broadcasted for new image message');
     }
 
+    // Send FCM push notifications for image
+    try {
+      const axios = require('axios');
+      
+      // Get room members (excluding sender)
+      const roomMembers = room.members
+        .filter(member => member.empId !== employeeId)
+        .map(member => member.empId);
+
+      // Get FCM tokens for room members
+      const User = require('../models/User');
+      const usersWithTokens = await User.find({
+        employeeID: { $in: roomMembers },
+        fcmToken: { $exists: true, $ne: null }
+      });
+
+      if (usersWithTokens.length > 0) {
+        // เอาเฉพาะ unique tokens เพื่อป้องกันการส่งซ้ำ
+        const uniqueTokens = [...new Set(usersWithTokens.map(user => user.fcmToken))];
+        const userIds = usersWithTokens.map(user => user.employeeID);
+        
+        console.log(`[FCM] Sending image notification to ${uniqueTokens.length} users in room ${roomId}:`, userIds);
+        
+        // ส่งไปยังแต่ละ token แยกกัน
+        let successCount = 0;
+        let failureCount = 0;
+        const failedTokens = [];
+        
+        for (const token of uniqueTokens) {
+          try {
+            const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+              token: token,
+              title: `💬 ${sender.fullName}`,
+              body: 'ส่งรูปภาพ',
+              data: {
+                type: "chat_message",
+                roomId: roomId.toString(),
+                roomName: room.name,
+                messageId: messageObj._id.toString(),
+                senderId: employeeId,
+                senderName: sender.fullName,
+                timestamp: new Date().toISOString(),
+                isReply: replyToId ? "true" : "false",
+                replyToId: replyToId ? replyToId.toString() : ""
+              }
+            });
+            
+            if (fcmResponse.data.success) {
+              successCount++;
+              console.log(`[FCM] Image notification sent to token: ${token.substring(0, 20)}...`);
+            } else {
+              failureCount++;
+              failedTokens.push(token);
+              console.log(`[FCM] Failed to send image notification to token: ${token.substring(0, 20)}...`);
+            }
+          } catch (error) {
+            console.error(`[FCM] Error sending image notification to token ${token.substring(0, 20)}...:`, error.message);
+            failureCount++;
+            failedTokens.push(token);
+          }
+        }
+        
+        console.log('[FCM] Image notification sent successfully:', {
+          successCount: successCount,
+          failureCount: failureCount,
+          totalTokens: uniqueTokens.length,
+          roomId: roomId,
+          roomName: room.name
+        });
+        
+        // Log invalid tokens แต่ไม่ลบออก
+        if (failedTokens.length > 0) {
+          console.log('[FCM] Invalid tokens found in image notification (not removed):', failedTokens.length);
+          console.log('[FCM] Failed tokens:', failedTokens.map(token => token.substring(0, 20) + '...'));
+        }
+      } else {
+        console.log(`[FCM] No FCM tokens found for room ${roomId} members`);
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending image notification:', fcmError.message);
+    }
+
     // Response data
     const responseData = {
       _id: messageObj._id,
@@ -1381,6 +1463,88 @@ router.post('/upload-file', uploadDocument.single('file'), async (req, res) => {
       };
       io.emit('newMessageNotification', notificationData);
       console.log('Notification broadcasted for new file message');
+    }
+
+    // Send FCM push notifications for file
+    try {
+      const axios = require('axios');
+      
+      // Get room members (excluding sender)
+      const roomMembers = room.members
+        .filter(member => member.empId !== employeeId)
+        .map(member => member.empId);
+
+      // Get FCM tokens for room members
+      const User = require('../models/User');
+      const usersWithTokens = await User.find({
+        employeeID: { $in: roomMembers },
+        fcmToken: { $exists: true, $ne: null }
+      });
+
+      if (usersWithTokens.length > 0) {
+        // เอาเฉพาะ unique tokens เพื่อป้องกันการส่งซ้ำ
+        const uniqueTokens = [...new Set(usersWithTokens.map(user => user.fcmToken))];
+        const userIds = usersWithTokens.map(user => user.employeeID);
+        
+        console.log(`[FCM] Sending file notification to ${uniqueTokens.length} users in room ${roomId}:`, userIds);
+        
+        // ส่งไปยังแต่ละ token แยกกัน
+        let successCount = 0;
+        let failureCount = 0;
+        const failedTokens = [];
+        
+        for (const token of uniqueTokens) {
+          try {
+            const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+              token: token,
+              title: `💬 ${sender.fullName}`,
+              body: `ส่งไฟล์ ${originalFilename}`,
+              data: {
+                type: "chat_message",
+                roomId: roomId.toString(),
+                roomName: room.name,
+                messageId: messageObj._id.toString(),
+                senderId: employeeId,
+                senderName: sender.fullName,
+                timestamp: new Date().toISOString(),
+                isReply: replyToId ? "true" : "false",
+                replyToId: replyToId ? replyToId.toString() : ""
+              }
+            });
+            
+            if (fcmResponse.data.success) {
+              successCount++;
+              console.log(`[FCM] File notification sent to token: ${token.substring(0, 20)}...`);
+            } else {
+              failureCount++;
+              failedTokens.push(token);
+              console.log(`[FCM] Failed to send file notification to token: ${token.substring(0, 20)}...`);
+            }
+          } catch (error) {
+            console.error(`[FCM] Error sending file notification to token ${token.substring(0, 20)}...:`, error.message);
+            failureCount++;
+            failedTokens.push(token);
+          }
+        }
+        
+        console.log('[FCM] File notification sent successfully:', {
+          successCount: successCount,
+          failureCount: failureCount,
+          totalTokens: uniqueTokens.length,
+          roomId: roomId,
+          roomName: room.name
+        });
+        
+        // Log invalid tokens แต่ไม่ลบออก
+        if (failedTokens.length > 0) {
+          console.log('[FCM] Invalid tokens found in file notification (not removed):', failedTokens.length);
+          console.log('[FCM] Failed tokens:', failedTokens.map(token => token.substring(0, 20) + '...'));
+        }
+      } else {
+        console.log(`[FCM] No FCM tokens found for room ${roomId} members`);
+      }
+    } catch (fcmError) {
+      console.error('[FCM] Error sending file notification:', fcmError.message);
     }
 
     // Response data

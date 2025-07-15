@@ -1107,6 +1107,7 @@ app.use('/api/messages', require('./routes/messages'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/direct-messages', require('./routes/directMessageRoutes'));
 app.use('/api/fcm', require('./routes/fcm'));
+app.use('/api', require('./routes/appVersion'));
 
 const PORT = process.env.PORT || 8006;
 server.listen(PORT, () => {
