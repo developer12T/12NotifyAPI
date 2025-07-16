@@ -255,7 +255,7 @@ router.post('/send', async (req, res) => {
         });
         
         try {
-          const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+          const fcmResponse = await axios.post(`${process.env.API_URL_FCM}/api/fcm/send-notification`, {
             token: recipientUser.fcmToken,
             title: `💬 ${userDetails.user.fullNameThai}`,
             body: message.length > 50 ? message.substring(0, 50) + '...' : message,
@@ -603,7 +603,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
 
       if (recipientUser && recipientUser.fcmToken) {
         try {
-          const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+          const fcmResponse = await axios.post(`${process.env.API_URL_FCM}/api/fcm/send-notification`, {
             token: recipientUser.fcmToken,
             title: `💬 ${userDetails.user.fullName}`,
             body: 'ส่งรูปภาพ',
@@ -924,7 +924,7 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
 
       if (recipientUser && recipientUser.fcmToken) {
         try {
-          const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+          const fcmResponse = await axios.post(`${process.env.API_URL_FCM}/api/fcm/send-notification`, {
             token: recipientUser.fcmToken,
             title: `💬 ${userDetails.user.fullName}`,
             body: `ส่งไฟล์ ${originalFilename}`,

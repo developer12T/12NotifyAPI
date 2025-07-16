@@ -68,6 +68,7 @@ function transformEntryFormat(entries) {
       department: tempEntry.department ?? null,
       company: tempEntry.company ?? null,
       status: tempEntry.distinguishedName ?? 0,
+      dn: tempEntry.dn ?? null,
     };
   });
 }

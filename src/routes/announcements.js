@@ -98,7 +98,7 @@ router.post('/send', upload.single('image'), async (req, res) => {
         
         for (const token of uniqueTokens) {
           try {
-            const fcmResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/fcm/send-notification`, {
+            const fcmResponse = await axios.post(`${process.env.API_URL_FCM}/api/fcm/send-notification`, {
               token: token,
               title: announcement.title,
               body: announcement.content,
